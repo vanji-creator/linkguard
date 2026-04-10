@@ -1,0 +1,169 @@
+/* ═══════════════════════════════════════════════════════
+   LinkGuard — Content Styles
+   ═══════════════════════════════════════════════════════ */
+
+/* Small dot badge on every link */
+.lg-badge {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  margin-left: 3px;
+  vertical-align: middle;
+  pointer-events: none;
+  flex-shrink: 0;
+  transition: background 0.2s;
+}
+
+.lg-badge-neutral  { background: #8e8e93; }
+.lg-badge-safe     { background: #34c759; }
+.lg-badge-suspicious { background: #ffb300; }
+.lg-badge-dangerous  { background: #ff3b30; }
+.lg-badge-unknown    { background: #636366; }
+
+/* Link outlines after scan */
+a.lg-suspicious {
+  outline: 2px solid rgba(255, 179, 0, 0.5) !important;
+  outline-offset: 2px;
+  border-radius: 3px;
+}
+a.lg-dangerous {
+  outline: 2px solid rgba(255, 59, 48, 0.6) !important;
+  outline-offset: 2px;
+  border-radius: 3px;
+}
+
+/* ═══════════════════════════════════════════════════════
+   Scan Overlay
+   ═══════════════════════════════════════════════════════ */
+#lg-scan-overlay {
+  font-family: ui-sans-serif, system-ui, -apple-system, sans-serif;
+}
+
+#lg-scan-overlay .lg-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.55);
+  backdrop-filter: blur(4px);
+  z-index: 2147483645;
+}
+
+#lg-scan-overlay .lg-card {
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  z-index: 2147483646;
+  background: #14171f;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 18px;
+  padding: 28px 24px 22px;
+  max-width: 400px;
+  width: calc(100% - 40px);
+  box-shadow: 0 28px 70px rgba(0, 0, 0, 0.6);
+  color: #fff;
+  text-align: center;
+}
+
+.lg-card-icon {
+  font-size: 38px;
+  margin-bottom: 12px;
+  line-height: 1;
+}
+
+.lg-card-title {
+  font-size: 17px;
+  font-weight: 700;
+  margin-bottom: 8px;
+  color: #fff;
+}
+
+.lg-card-reason {
+  font-size: 13px;
+  line-height: 1.5;
+  color: rgba(255, 255, 255, 0.75);
+  margin-bottom: 10px;
+}
+
+.lg-card-url {
+  font-size: 11px;
+  color: rgba(255, 255, 255, 0.4);
+  word-break: break-all;
+  margin-bottom: 20px;
+  padding: 7px 10px;
+  background: rgba(255, 255, 255, 0.05);
+  border-radius: 8px;
+}
+
+.lg-card-actions {
+  display: flex;
+  gap: 10px;
+}
+
+/* Verdict title colors */
+.lg-verdict-safe      { color: #34c759; }
+.lg-verdict-suspicious { color: #ffb300; }
+.lg-verdict-dangerous  { color: #ff3b30; }
+.lg-verdict-unknown    { color: #8e8e93; }
+
+/* ═══════════════════════════════════════════════════════
+   Buttons
+   ═══════════════════════════════════════════════════════ */
+.lg-btn {
+  flex: 1;
+  padding: 12px 14px;
+  border-radius: 10px;
+  font-weight: 600;
+  font-size: 13px;
+  cursor: pointer;
+  border: none;
+  transition: all 0.15s;
+}
+
+.lg-btn-primary {
+  background: #5ac8fa;
+  color: #000;
+}
+.lg-btn-primary:hover { background: #4ab8ea; }
+
+.lg-btn-ghost {
+  background: rgba(255, 255, 255, 0.08);
+  color: rgba(255, 255, 255, 0.6);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+}
+.lg-btn-ghost:hover { color: #fff; background: rgba(255, 255, 255, 0.14); }
+
+.lg-btn-cancel {
+  background: #34c759;
+  color: #fff;
+}
+.lg-btn-cancel:hover { background: #2db84d; }
+
+.lg-btn-proceed {
+  background: rgba(255, 255, 255, 0.08);
+  color: rgba(255, 255, 255, 0.6);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+}
+
+/* Proceed button tints by verdict */
+.lg-proceed-safe:hover      { background: rgba(52, 199, 89, 0.2); color: #34c759; }
+.lg-proceed-suspicious:hover { background: rgba(255, 179, 0, 0.2); color: #ffb300; }
+.lg-proceed-dangerous:hover  { background: rgba(255, 59, 48, 0.2); color: #ff3b30; }
+.lg-proceed-unknown:hover    { background: rgba(255, 255, 255, 0.14); color: #fff; }
+
+/* ═══════════════════════════════════════════════════════
+   Spinner
+   ═══════════════════════════════════════════════════════ */
+.lg-spinner {
+  width: 36px;
+  height: 36px;
+  border: 3px solid rgba(255, 255, 255, 0.15);
+  border-top-color: #5ac8fa;
+  border-radius: 50%;
+  margin: 0 auto 14px;
+  animation: lg-spin 0.75s linear infinite;
+}
+
+@keyframes lg-spin {
+  to { transform: rotate(360deg); }
+}
