@@ -15,6 +15,7 @@ const urlCache = new Map();
 let urlhausSet = new Set();
 let openphishSet = new Set();
 let threatfoxSet = new Set();
+let communitySet = new Set();   // Phase 2: Supabase community blocklist
 let listsLoaded = false;
 let listsLoadingPromise = null;
 
@@ -26,10 +27,10 @@ const tabStats = new Map();
 // ═══════════════════════════════════════════════════════
 function openDB() {
   return new Promise((resolve, reject) => {
-    const req = indexedDB.open("linkguard", 1);
+    const req = indexedDB.open("linkguard", 2);  // v2 adds "community" store
     req.onupgradeneeded = (e) => {
       const db = e.target.result;
-      ["urlhaus", "openphish", "threatfox", "meta"].forEach((name) => {
+      ["urlhaus", "openphish", "threatfox", "meta", "community"].forEach((name) => {
         if (!db.objectStoreNames.contains(name)) db.createObjectStore(name);
       });
     };
@@ -83,16 +84,18 @@ async function dbPutBatch(storeName, urls) {
 // ═══════════════════════════════════════════════════════
 async function loadListsFromDB() {
   try {
-    const [urlhaus, openphish, threatfox] = await Promise.all([
+    const [urlhaus, openphish, threatfox, community] = await Promise.all([
       dbGetAllKeys("urlhaus"),
       dbGetAllKeys("openphish"),
       dbGetAllKeys("threatfox"),
+      dbGetAllKeys("community"),
     ]);
     urlhausSet = new Set(urlhaus);
     openphishSet = new Set(openphish);
     threatfoxSet = new Set(threatfox);
+    communitySet = new Set(community);
     listsLoaded = true;
-    console.log(`LinkGuard lists: URLhaus=${urlhausSet.size}, OpenPhish=${openphishSet.size}, ThreatFox=${threatfoxSet.size}`);
+    console.log(`LinkGuard lists: URLhaus=${urlhausSet.size}, OpenPhish=${openphishSet.size}, ThreatFox=${threatfoxSet.size}, Community=${communitySet.size}`);
   } catch (e) {
     console.error("LinkGuard: failed to load lists from IndexedDB", e);
   }
@@ -159,9 +162,73 @@ async function fetchThreatFox() {
   }
 }
 
+// ═══════════════════════════════════════════════════════
+// SUPABASE INTEGRATION (Phase 2)
+// ═══════════════════════════════════════════════════════
+async function getSupabaseConfig() {
+  const { supabaseUrl, supabaseAnonKey } = await chrome.storage.local.get(["supabaseUrl", "supabaseAnonKey"]);
+  if (!supabaseUrl || !supabaseAnonKey) return null;
+  return { supabaseUrl: supabaseUrl.replace(/\/$/, ""), supabaseAnonKey };
+}
+
+function supabaseHeaders(anonKey) {
+  return {
+    "apikey": anonKey,
+    "Authorization": `Bearer ${anonKey}`,
+    "Content-Type": "application/json",
+  };
+}
+
+async function fetchCommunityBlocklist() {
+  const cfg = await getSupabaseConfig();
+  if (!cfg) return;
+  try {
+    const resp = await fetch(
+      `${cfg.supabaseUrl}/rest/v1/urls?select=url&verdict=in.(dangerous,suspicious)&limit=50000`,
+      { headers: supabaseHeaders(cfg.supabaseAnonKey) }
+    );
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+    const rows = await resp.json();
+    const urls = rows.map((r) => r.url).filter(Boolean);
+    await dbPutBatch("community", urls);
+    communitySet = new Set(urls);
+    console.log(`LinkGuard: Community blocklist updated — ${urls.length} URLs`);
+  } catch (e) {
+    console.error("LinkGuard: Community blocklist fetch failed", e.message);
+  }
+}
+
+// Fire-and-forget: silently report a URL to Supabase reports table
+async function reportUrlToSupabase(url, verdictAtTime) {
+  const cfg = await getSupabaseConfig();
+  if (!cfg) return;
+  try {
+    await fetch(`${cfg.supabaseUrl}/rest/v1/reports`, {
+      method: "POST",
+      headers: supabaseHeaders(cfg.supabaseAnonKey),
+      body: JSON.stringify({ url, verdict_at_time: verdictAtTime }),
+    });
+  } catch (e) {
+    console.error("LinkGuard: report submission failed", e.message);
+  }
+}
+
+// Silently log dangerous/suspicious verdicts for ML training data
+// Never logs safe or unknown verdicts (privacy)
+async function logScanToSupabase(url, verdict, reason) {
+  if (verdict === "safe" || verdict === "unknown") return;
+  const cfg = await getSupabaseConfig();
+  if (!cfg) return;
+  fetch(`${cfg.supabaseUrl}/rest/v1/scan_logs`, {
+    method: "POST",
+    headers: supabaseHeaders(cfg.supabaseAnonKey),
+    body: JSON.stringify({ url, verdict, source: reason || "extension", device: "chrome-extension" }),
+  }).catch(() => {});
+}
+
 async function refreshLists() {
   console.log("LinkGuard: Refreshing blocklists...");
-  await Promise.all([fetchURLhaus(), fetchOpenPhish(), fetchThreatFox()]);
+  await Promise.all([fetchURLhaus(), fetchOpenPhish(), fetchThreatFox(), fetchCommunityBlocklist()]);
   await dbPut("meta", "lastRefresh", Date.now());
 }
 
@@ -192,6 +259,8 @@ function checkLocalLists(url) {
     return { verdict: "dangerous", reason: "Found in OpenPhish phishing database" };
   if (threatfoxSet.has(url) || threatfoxSet.has(norm))
     return { verdict: "dangerous", reason: "Found in ThreatFox threat database" };
+  if (communitySet.has(url) || communitySet.has(norm))
+    return { verdict: "dangerous", reason: "Reported by the LinkGuard community" };
   return null;
 }
 
@@ -323,7 +392,22 @@ async function scanUrl(url, includeVT) {
     return heuristic;
   }
 
-  // 4. VirusTotal (click-time scans only)
+  // 4. AI Model — Phase 4 placeholder (not yet active)
+  // Uncomment and implement checkWithAIModel() once the HuggingFace model is published.
+  // Runs between heuristics and VirusTotal — expected to cut VT calls by ~80-90%.
+  //
+  // const { hfApiKey } = await chrome.storage.local.get("hfApiKey");
+  // if (hfApiKey && includeVT) {
+  //   const aiResult = await checkWithAIModel(url, hfApiKey);
+  //   if (aiResult && aiResult.score >= 0.90) {
+  //     const r = { verdict: aiResult.label, reason: `LinkGuard AI model (${(aiResult.score * 100).toFixed(0)}% confidence)` };
+  //     urlCache.set(url, { ...r, ts: Date.now() });
+  //     return r;
+  //   }
+  //   // score < 0.90 → uncertain → fall through to VirusTotal
+  // }
+
+  // 5. VirusTotal (click-time scans only)
   if (includeVT) {
     const { vtApiKey } = await chrome.storage.local.get("vtApiKey");
     if (vtApiKey) {
@@ -353,12 +437,21 @@ async function ensureInjectedAllFrames(tabId) {
 }
 
 chrome.runtime.onInstalled.addListener(async () => {
-  await chrome.storage.local.set({
+  // Only set defaults for keys that don't exist yet — never overwrite user's saved settings
+  const DEFAULTS = {
     vtApiKey: "",
     textExplainerEnabled: false,
     customApiKey: "",
     modelName: DEFAULT_MODEL,
-  });
+    supabaseUrl: "",
+    supabaseAnonKey: "",
+  };
+  const existing = await chrome.storage.local.get(Object.keys(DEFAULTS));
+  const toSet = {};
+  for (const [k, v] of Object.entries(DEFAULTS)) {
+    if (!(k in existing)) toSet[k] = v;
+  }
+  if (Object.keys(toSet).length) await chrome.storage.local.set(toSet);
   await initLists();
   const tabs = await chrome.tabs.query({ status: "complete" });
   for (const tab of tabs) {
@@ -408,16 +501,16 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
 
   if (request.action === "getSettings") {
     chrome.storage.local.get(
-      ["vtApiKey", "textExplainerEnabled", "customApiKey", "modelName"],
+      ["vtApiKey", "textExplainerEnabled", "customApiKey", "modelName", "supabaseUrl", "supabaseAnonKey"],
       (res) => sendResponse(res)
     );
     return true;
   }
 
   if (request.action === "saveSettings") {
-    const { vtApiKey, textExplainerEnabled, customApiKey, modelName } = request;
+    const { vtApiKey, textExplainerEnabled, customApiKey, modelName, supabaseUrl, supabaseAnonKey } = request;
     chrome.storage.local.set(
-      { vtApiKey, textExplainerEnabled, customApiKey, modelName },
+      { vtApiKey, textExplainerEnabled, customApiKey, modelName, supabaseUrl, supabaseAnonKey },
       () => sendResponse({ ok: true })
     );
     return true;
@@ -446,10 +539,36 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       stats.scanned++;
       stats[result.verdict] = (stats[result.verdict] || 0) + 1;
       tabStats.set(tabId, stats);
+      // Log threats to Supabase (fire-and-forget, never blocks scan)
+      logScanToSupabase(request.url, result.verdict, result.reason);
       sendResponse(result);
     }).catch((e) => {
       sendResponse({ verdict: "unknown", reason: "Scan error: " + e.message });
     });
+    return true;
+  }
+
+  // User-initiated report: immediately protect locally + send to Supabase
+  if (request.action === "reportUrl") {
+    const rawUrl  = request.url;
+    const normUrl = normalizeUrl(rawUrl);
+
+    // 1. Bust the verdict cache so the next scan doesn't return stale "safe"
+    urlCache.delete(rawUrl);
+    urlCache.delete(normUrl);
+
+    // 2. Add to the in-memory community set immediately
+    communitySet.add(rawUrl);
+    communitySet.add(normUrl);
+
+    // 3. Persist both forms to IndexedDB so protection survives service worker restart
+    dbPut("community", rawUrl,  1).catch(() => {});
+    dbPut("community", normUrl, 1).catch(() => {});
+
+    // 4. Send to Supabase (trigger will promote to urls table)
+    reportUrlToSupabase(rawUrl, request.verdict).catch(() => {});
+
+    sendResponse({ ok: true });
     return true;
   }
 
@@ -482,6 +601,16 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
 
   if (request.action === "refreshLists") {
     refreshLists().then(() => sendResponse({ ok: true })).catch(() => sendResponse({ ok: false }));
+    return true;
+  }
+
+  if (request.action === "getListStats") {
+    sendResponse({
+      urlhaus:   urlhausSet.size,
+      openphish: openphishSet.size,
+      threatfox: threatfoxSet.size,
+      community: communitySet.size,
+    });
     return true;
   }
 });
