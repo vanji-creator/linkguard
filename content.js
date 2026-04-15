@@ -114,6 +114,8 @@
     const href = resolveHref(a);
     if (!href) return;
     a.__lg_attached = true;
+    // Remove any stale badge that may have been copied via cloneNode()
+    a.querySelector(".lg-badge")?.remove();
 
     let destHost;
     try { destHost = new URL(href).hostname.toLowerCase(); } catch { return; }
@@ -276,6 +278,11 @@
         <button class="lg-btn lg-btn-cancel" id="lg-do-cancel">Cancel</button>
         <button class="lg-btn lg-btn-proceed lg-proceed-${verdict}" id="lg-do-proceed">${proceedLabels[verdict]}</button>
       </div>
+      <div class="lg-report-row">
+        <button class="lg-btn-report" id="lg-do-report">
+          <span class="lg-report-icon">⚑</span>Report this link
+        </button>
+      </div>
     `;
 
     // Update the badge on the original link
@@ -286,6 +293,19 @@
     overlay.querySelector("#lg-do-proceed").onclick = () => {
       removeScanOverlay();
       navigate(url, isNewTab);
+    };
+    overlay.querySelector("#lg-do-report").onclick = () => {
+      const btn = overlay.querySelector("#lg-do-report");
+      btn.innerHTML = '<span class="lg-report-icon">…</span>Reporting…';
+      btn.disabled = true;
+      chrome.runtime.sendMessage({ action: "reportUrl", url, verdict }, (res) => {
+        if (res?.ok) {
+          btn.innerHTML = '<span class="lg-report-icon">✓</span>Reported — thanks';
+        } else {
+          btn.innerHTML = '<span class="lg-report-icon">⚠</span>Failed — try again';
+          btn.disabled = false;
+        }
+      });
     };
   }
 

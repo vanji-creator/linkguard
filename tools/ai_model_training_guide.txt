@@ -1,0 +1,472 @@
+========================================================
+CONTEXT FOR THE AI TEACHER — READ THIS FIRST
+========================================================
+
+I am a complete beginner to machine learning and AI engineering. I have a software
+background (I build Chrome extensions and web apps) so I understand code, but I have
+never trained a model before, never used PyTorch or HuggingFace, and don't know the
+terminology deeply yet.
+
+My goal is to build a URL safety classifier — a model that takes a URL as input and
+predicts whether it is safe, suspicious, or dangerous. This model will eventually be
+published on HuggingFace for the world to use, and integrated into a Chrome extension
+I built called LinkGuard that protects people from malicious links.
+
+I want you to be my teacher as I go through the steps below one by one. Please:
+- Explain every concept in plain English before showing code
+- Tell me WHY we are doing each step, not just what to type
+- When I make mistakes, help me understand what went wrong and why
+- Point out when something is a best practice vs. just one way to do it
+- If I ask a question that seems basic, take it seriously — I am learning
+- Celebrate progress with me when a checkpoint is reached
+- Warn me in advance about the most common mistakes at each step
+- Give me mental models and analogies when introducing new concepts
+
+I will work through the phases below in order, one at a time. When I say
+"let's start Phase X" or "I'm ready for the next step", guide me through it
+interactively. Don't dump everything at once — teach me step by step.
+
+========================================================
+THE FULL TRAINING GUIDE (our curriculum)
+========================================================
+
+PROJECT: LinkGuard URL Safety Classifier
+GOAL: Fine-tune a foundational language model (SecureBERT or DistilBERT) on a large
+      labeled URL dataset to predict: safe / suspicious / dangerous
+PUBLISH: HuggingFace Hub as "linkguard/url-safety-classifier"
+INTEGRATE: Chrome extension calls the model via HuggingFace Inference API during link scans
+
+--------------------------------------------------------
+PHASE 0 — Environment Setup
+--------------------------------------------------------
+
+What I need installed:
+- Python 3.10+
+- CUDA (if I have an NVIDIA GPU — massively speeds up training)
+
+Python libraries to install (in this order):
+  pip install torch torchvision torchaudio          # PyTorch — the foundation
+  pip install transformers datasets                  # HuggingFace — pre-trained models
+  pip install scikit-learn pandas numpy              # data handling + metrics
+  pip install matplotlib seaborn                     # visualize training progress
+  pip install onnx onnxruntime                       # export model for browser
+  pip install accelerate                             # makes training faster automatically
+  pip install wandb                                  # experiment tracking (ESSENTIAL)
+
+Cloud GPU options (I may not have a local GPU):
+- Google Colab (free) — 15GB VRAM, good for prototyping
+- Kaggle Notebooks (free) — 30 hours/week GPU, good for serious training
+- Lambda Labs / Vast.ai (paid, ~$0.50/hr) — for final production training
+- Avoid training on CPU — what takes 10 minutes on GPU takes 10 hours on CPU
+
+CHECKPOINT 0 — I should be able to:
+✓ Run Python + pip without errors
+✓ Run: import torch; torch.cuda.is_available()  →  ideally returns True
+✓ Have a WandB account created at wandb.ai (free)
+
+--------------------------------------------------------
+PHASE 1 — Data Collection
+--------------------------------------------------------
+
+This is the most important phase. Bad data = bad model, no matter how good the code is.
+
+What I need: labeled URLs
+  Label 0 = safe        (normal website)
+  Label 1 = suspicious  (shows warning signs)
+  Label 2 = dangerous   (confirmed malicious)
+
+Sources for MALICIOUS URLs (labels 1 and 2):
+  - URLhaus       → urlhaus.abuse.ch/downloads/csv/           (~2M URLs, malware)
+  - PhishTank     → phishtank.org (download verified only)    (~1M URLs, phishing)
+  - OpenPhish     → openphish.com/feed.txt                    (~50K URLs, active)
+  - ThreatFox     → threatfox.abuse.ch/export/csv/            (~300K URLs, malware C2)
+  - ISCX-URL-2016 → findable on Kaggle                        (~36K URLs, clean benchmark)
+  - Mendeley URL dataset → data.mendeley.com                  (~650K URLs, mixed labeled)
+
+Sources for SAFE URLs (label 0):
+  - Tranco top-1M     → tranco-list.eu                        (best research-grade safe list)
+  - Cisco Umbrella    → umbrella.cisco.com/popularity/top-1m.csv.zip
+  - Common Crawl URLs → commoncrawl.org (massive, sample a subset)
+
+Target dataset size: 3–5 million labeled URLs minimum.
+
+I will write data/collect.py to:
+- Download each source
+- Save as CSV with columns: url, label, source, date_collected
+- Keep raw downloads separate from processed files
+
+Critical data problems to watch for:
+1. CLASS IMBALANCE — likely 2M safe vs 500K malicious. A naive model learns to
+   say "safe" for everything and gets 80% accuracy while being useless. Fix: balance the
+   dataset (covered in Phase 2).
+
+2. DATA CONTAMINATION — same URL in both train and test sets. Model memorizes instead
+   of learning. Fix: deduplicate before splitting.
+
+3. TEMPORAL LEAKAGE — testing on old data that existed during training. Fix: split by
+   date — train on URLs before a cutoff date, test on URLs after.
+
+4. DEAD URLs — malicious URLs from 2019 may no longer resolve. The URL string itself
+   still carries signal — "paypal-verify-account.ru" is suspicious regardless.
+
+CHECKPOINT 1 — I should have:
+✓ A CSV file with at minimum 500K rows (url, label)
+✓ Label distribution confirmed with value_counts()
+✓ No duplicate URLs
+✓ Source column filled in for traceability
+
+--------------------------------------------------------
+PHASE 2 — Data Preprocessing
+--------------------------------------------------------
+
+Step 2.1 — Cleaning
+Remove these (they add noise):
+- URLs longer than 2000 characters
+- URLs with no TLD
+- Localhost and private IPs (127.x.x.x, 192.168.x.x)
+- Non-HTTP/HTTPS protocols
+- Duplicates
+
+  df = df[df['url'].str.startswith('http')]
+  df = df[df['url'].str.len() < 2000]
+  df = df.drop_duplicates(subset='url')
+
+Step 2.2 — URL Normalization
+Apply consistently to training data AND at inference time (they must match):
+- Lowercase
+- Remove trailing slash
+- Decode percent-encoding (%20 → space)
+- Strip utm_* tracking parameters
+
+Step 2.3 — Handling Class Imbalance
+  If ratio is < 3:1 (safe:malicious)  → no action needed
+  If ratio is 3:1 to 10:1             → weighted loss function (easiest)
+  If ratio is > 10:1                  → oversample minority OR undersample majority
+
+  Weighted loss (recommended — no data loss):
+    class_weights = [1.0, 3.0, 5.0]   # safe, suspicious, dangerous
+    # Tell the model: getting a dangerous URL wrong costs more
+
+Step 2.4 — Train / Validation / Test Split
+  70% → training set     (model sees this during training)
+  15% → validation set   (check progress, tune hyperparameters)
+  15% → test set         (NEVER touch until final evaluation)
+
+  GOLDEN RULE: The test set is sacred. Look at it once, at the very end, after
+  all decisions are made. If you keep peeking and adjusting, you overfit to it
+  and your published accuracy will be a lie.
+
+  Use stratified split:
+    from sklearn.model_selection import train_test_split
+    train, temp = train_test_split(df, test_size=0.30, stratify=df['label'], random_state=42)
+    val, test   = train_test_split(temp, test_size=0.50, stratify=temp['label'], random_state=42)
+
+Step 2.5 — Feature Engineering
+For BERT-class model (our approach): the tokenizer handles this automatically.
+For character-level model: convert URL to character IDs, pad to fixed length (200 chars).
+
+CHECKPOINT 2 — I should have:
+✓ Clean dataset: no nulls, no duplicates, valid URLs only
+✓ Saved as train.csv, val.csv, test.csv
+✓ Class distribution printed for each split (should be similar across all three)
+✓ test.csv locked — I will not look at test results until Phase 5
+
+--------------------------------------------------------
+PHASE 3 — Model Architecture
+--------------------------------------------------------
+
+Which model to choose:
+
+  OPTION A — Fine-tune SecureBERT or DistilBERT (our plan)
+    Model: "ehsanaghaei/SecureBERT" on HuggingFace
+    Input: raw URL string (tokenized automatically)
+    Output: 3-class softmax [safe, suspicious, dangerous]
+    Size: ~110MB before quantization, ~30MB after ONNX INT8 quantization
+    Expected F1: 97–99%
+    Best for: API deployment, publishable model
+
+  OPTION B — Character-level CNN (alternative, smaller)
+    Architecture: Embedding → Conv1D × 3 → GlobalMaxPool → Dense → Softmax
+    Size: ~1–2MB (fits in browser)
+    Expected F1: 94–97%
+    Best for: in-browser use
+
+  OPTION C — Fine-tune large → distil into small (advanced)
+    Train BERT first → knowledge distillation → tiny student model
+    Best of both worlds but more complex
+    Best for: long-term production use
+
+How fine-tuning SecureBERT works:
+  URL string → tokenizer → BERT 12 layers of attention → [CLS] embedding (768 dims)
+             → classification head (2 linear layers added on top) → [safe, susp, danger]
+
+  "Fine-tuning" = BERT already knows language patterns from billions of words.
+  We keep all that knowledge and add a small classification head, then train the
+  whole thing on our URL data. Much faster than training from scratch.
+
+Key hyperparameters:
+  LEARNING_RATE  = 2e-5    # How big a step per weight update. Range for BERT: 1e-5 to 5e-5
+  BATCH_SIZE     = 32      # URLs processed before each weight update. Common: 16, 32, 64
+  EPOCHS         = 3–5     # Full passes through training data. BERT rarely needs more than 5
+  MAX_LENGTH     = 128     # Max URL tokens (truncate longer). Covers 95%+ of real URLs
+  WARMUP_STEPS   = 10%     # Gradually raise LR for first 10% of training steps
+
+CHECKPOINT 3 — I should be able to:
+✓ Load the model without errors
+✓ Run a forward pass: input a URL → get output tensor of shape [batch_size, 3]
+✓ Print parameter count (~110M for SecureBERT)
+
+--------------------------------------------------------
+PHASE 4 — Training
+--------------------------------------------------------
+
+The training loop (what happens each step):
+  1. Take a batch of URLs + their labels
+  2. Run through model → get predictions
+  3. Calculate loss: how wrong were predictions? (CrossEntropyLoss)
+  4. Backpropagate: calculate how to adjust each weight to reduce loss
+  5. Optimizer step: actually adjust the weights
+  6. Repeat
+
+Essential training practices:
+
+  Learning rate scheduler (don't use constant LR):
+    Linear warmup → linear decay
+    Standard for BERT fine-tuning
+    Use: from transformers import get_linear_schedule_with_warmup
+
+  Gradient clipping (prevents exploding gradients):
+    torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+
+  Mixed precision training (almost free 2x speedup):
+    from torch.cuda.amp import autocast, GradScaler
+    Runs float16 where possible, float32 where needed
+
+  Checkpoint saving (save model every epoch):
+    Save: model weights, optimizer state, epoch number, best val_f1
+    Always save the BEST checkpoint = highest val_F1, NOT necessarily last epoch
+    torch.save(checkpoint, f'checkpoint_epoch_{epoch}.pt')
+
+Experiment tracking with WandB (non-negotiable):
+  import wandb
+  wandb.init(project="linkguard-url-classifier")
+  wandb.log({
+      "train/loss": loss,
+      "train/accuracy": acc,
+      "val/loss": val_loss,
+      "val/f1": val_f1,
+      "epoch": epoch,
+      "learning_rate": scheduler.get_last_lr()[0]
+  })
+  WandB gives live graphs, run comparison, reproducibility, and public sharing.
+  The HuggingFace model card will link to these training curves.
+
+What healthy training looks like:
+  Epoch 1: train_loss=0.45, val_loss=0.38, val_f1=0.91  ← improving
+  Epoch 2: train_loss=0.28, val_loss=0.24, val_f1=0.96  ← improving
+  Epoch 3: train_loss=0.18, val_loss=0.22, val_f1=0.97  ← slightly improving
+  Epoch 4: train_loss=0.12, val_loss=0.25, val_f1=0.96  ← STOP, overfitting starts
+
+Warning signs and fixes:
+  Loss is NaN              → LR too high. Restart with 10x lower LR
+  Loss not decreasing      → LR too low or data pipeline bug. Check data loading
+  Val loss rises, train ok → Overfitting. Reduce epochs, add dropout, get more data
+  GPU memory error         → Batch size too large. Halve it
+  Training very slow       → Not using GPU / mixed precision. Check CUDA, enable fp16
+
+CHECKPOINT 4 — I should have:
+✓ Training runs without errors for at least 1 full epoch
+✓ WandB dashboard showing training curves
+✓ Model checkpoint saved at best val_F1
+✓ No overfitting (val_loss not rising sharply)
+
+--------------------------------------------------------
+PHASE 5 — Evaluation
+--------------------------------------------------------
+
+Metrics to use (accuracy alone is misleading with imbalanced classes):
+
+  Precision = of all URLs I flagged as dangerous, how many actually were?
+              High precision = few false alarms
+
+  Recall    = of all actually dangerous URLs, how many did I catch?
+              High recall = few missed threats
+              *** For security tools, RECALL matters more than precision ***
+              Missing a dangerous URL is worse than a false alarm.
+
+  F1 Score  = harmonic mean of precision and recall (the main metric to optimize)
+
+  AUC-ROC   = model's ability to distinguish classes regardless of threshold
+              1.0 = perfect, 0.5 = random guessing
+
+Confusion matrix (most important visualization):
+                Predicted
+                Safe   Susp   Danger
+  Actual Safe  [9850    80      70]   ← 150 false alarms (acceptable)
+        Susp   [ 120   780     100]
+        Danger [  20    15    9965]   ← 35 missed threats (minimize this)
+
+  Low numbers off the diagonal = good model.
+
+Error analysis (do this manually — critical):
+  Take the 50 worst wrong predictions. Look at them.
+  Example pattern to find:
+    Predicted SAFE, actually DANGEROUS:
+      - "google-secure.accountverify.xyz/login"  ← mimics Google
+      - "bit.ly/3xK9mP"  ← URL shortener hides destination
+    Predicted DANGEROUS, actually SAFE:
+      - "testphishing.com"  ← security researcher test site
+  This reveals what to improve next.
+
+Benchmark against existing tools:
+  Test on URLs that VirusTotal flags. Goal: catch ≥85% of what VT catches,
+  plus catch novel/zero-day URLs that VT misses.
+
+CHECKPOINT 5 — I should have:
+✓ Evaluated ONLY on test set (run this only ONCE at the very end)
+✓ F1 score ≥ 0.95 per class
+✓ Confusion matrix generated and understood
+✓ 50-sample error analysis done
+✓ Results logged to WandB
+
+--------------------------------------------------------
+PHASE 6 — Model Optimization for Deployment
+--------------------------------------------------------
+
+ONNX export (universal format — runs everywhere):
+  import torch.onnx
+  torch.onnx.export(model, sample_input, "url_classifier.onnx")
+  # Can run in Python, browser (ONNX Runtime Web/WASM), C++, Java, mobile
+
+Quantization (shrink without losing much accuracy):
+  from onnxruntime.quantization import quantize_dynamic
+  quantize_dynamic("url_classifier.onnx", "url_classifier_int8.onnx")
+  # INT8: 4x smaller, 2-4x faster, ~0.5-1% accuracy drop
+
+Size comparison after optimization:
+  SecureBERT original:  110MB
+  ONNX export:           70MB
+  INT8 quantization:     28MB   ← good for API deployment
+  Distilled student:      2MB   ← for browser bundling (advanced, later)
+
+Inference speed benchmark:
+  Target: p99 < 200ms for API, p99 < 20ms for browser
+  Measure: median and 99th percentile latency over 1000 test URLs
+
+CHECKPOINT 6 — I should have:
+✓ ONNX model exported and tested (predictions match PyTorch model)
+✓ INT8 quantized version created
+✓ Accuracy drop from quantization < 1%
+✓ Inference speed measured and within targets
+
+--------------------------------------------------------
+PHASE 7 — Publishing to HuggingFace Hub
+--------------------------------------------------------
+
+Setup:
+  pip install huggingface_hub
+  huggingface-cli login
+  Create repo at huggingface.co — org: "linkguard", model: "url-safety-classifier"
+
+Files to upload:
+  pytorch_model.bin         ← trained weights
+  config.json               ← model architecture config
+  tokenizer files           ← so anyone can use it with one line
+  url_classifier_int8.onnx  ← for non-Python users
+  README.md                 ← MODEL CARD (this is your publication)
+
+The model card (README.md) template:
+  # LinkGuard URL Safety Classifier
+  Classifies URLs as safe / suspicious / dangerous.
+  Fine-tuned from SecureBERT on X million labeled URLs.
+
+  ## Performance
+  | Class      | Precision | Recall | F1   |
+  |------------|-----------|--------|------|
+  | Safe       | 0.98      | 0.99   | 0.98 |
+  | Suspicious | 0.94      | 0.91   | 0.92 |
+  | Dangerous  | 0.97      | 0.98   | 0.97 |
+
+  Training data: URLhaus, PhishTank, OpenPhish, Tranco-1M
+  Training code: github.com/vanji-creator/linkguard-model
+  WandB training report: [link]
+
+  ## Quick start (Python, 3 lines)
+  from transformers import pipeline
+  pipe = pipeline("text-classification", model="linkguard/url-safety-classifier")
+  pipe("paypal-secure-verify.ru/login")
+  # → [{'label': 'dangerous', 'score': 0.97}]
+
+CHECKPOINT 7 — I should have:
+✓ Model live on HuggingFace Hub
+✓ 3-line Python usage works for any user in the world
+✓ README/model card complete with metrics and training details
+✓ Training code public on GitHub
+
+--------------------------------------------------------
+PHASE 8 — Integrating into the Chrome Extension
+--------------------------------------------------------
+
+One new function in background.js (the scan step is already placeholder-commented):
+
+  async function checkWithAIModel(url, hfApiKey) {
+    const resp = await fetch(
+      "https://api-inference.huggingface.co/models/linkguard/url-safety-classifier",
+      {
+        method: "POST",
+        headers: {
+          "Authorization": `Bearer ${hfApiKey}`,
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({ inputs: url }),
+      }
+    );
+    const result = await resp.json();
+    return result[0]; // { label: "dangerous", score: 0.97 }
+  }
+
+This plugs into the existing scan pipeline between heuristics and VirusTotal.
+When model confidence >= 90%, return verdict immediately and skip VirusTotal.
+When confidence < 90%, fall through to VirusTotal as before.
+
+CHECKPOINT 8 — I should be able to:
+✓ Enter HuggingFace API key in extension Settings
+✓ Click a suspicious link → model returns verdict within ~300ms
+✓ VirusTotal calls visibly drop because model handles high-confidence cases
+✓ check WandB / HuggingFace Insights to see the model being called
+
+--------------------------------------------------------
+FULL TIMELINE (rough)
+--------------------------------------------------------
+
+  Week 1–2:  Data collection + preprocessing (Phases 1–2)
+  Week 3:    Model setup + first training run (Phases 3–4)
+  Week 4:    Evaluation + error analysis + retraining with fixes (Phase 5)
+  Week 5:    Optimization + quantization (Phase 6)
+  Week 6:    HuggingFace publish + extension integration (Phases 7–8)
+  Week 7+:   Retrain periodically as Supabase scan_logs accumulate
+
+--------------------------------------------------------
+MOST COMMON BEGINNER MISTAKES (avoid these)
+--------------------------------------------------------
+
+1. Evaluating on test set during development — use val set until you are done
+2. Not logging experiments to WandB — you will lose track of what worked
+3. Training too many epochs — BERT fine-tuning rarely needs more than 5
+4. Ignoring class imbalance — model silently fails on minority classes
+5. Not doing error analysis — metrics lie, looking at failures tells the truth
+6. Skipping the model card — nobody will use a model with no documentation
+7. Not versioning data — always know exactly which data produced which model
+
+========================================================
+HOW TO USE THIS GUIDE WITH ME
+========================================================
+
+I will come to you phase by phase. When I say "let's start Phase 0" (or any phase),
+guide me interactively through it. Ask me questions to check my understanding.
+If I get stuck, help me debug without just giving me the answer — help me think
+through it. When I complete a checkpoint, confirm it with me before we move on.
+
+I am building something real that I care about. I want to understand every step,
+not just copy-paste code. Be patient, be encouraging, and help me become an
+AI engineer through this project.
