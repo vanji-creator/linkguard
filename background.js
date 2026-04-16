@@ -8,6 +8,11 @@ const CACHE_TTL_MS = 60 * 60 * 1000;           // 1 hour
 const LIST_REFRESH_MS = 24 * 60 * 60 * 1000;   // 24 hours
 const VT_BASE = "https://www.virustotal.com/api/v3";
 
+// LinkGuard AI Model — set after deploying to HuggingFace Spaces
+// Leave empty to skip AI step and go straight to VirusTotal
+const LG_MODEL_URL = "";   // e.g. "https://vanji-linkguard.hf.space"
+const LG_CONFIDENCE_THRESHOLD = 0.90;
+
 // In-memory URL verdict cache: url → { verdict, reason, ts }
 const urlCache = new Map();
 
@@ -369,6 +374,47 @@ async function checkVirusTotal(url, apiKey) {
   }
 }
 
+// ═══════════════════════════════════════════════════════
+// LINKGUARD AI MODEL
+// ═══════════════════════════════════════════════════════
+
+/**
+ * Call the LinkGuard HuggingFace Spaces API.
+ * Returns { verdict, confidence } if confidence ≥ LG_CONFIDENCE_THRESHOLD,
+ * or null if below threshold (caller falls through to VirusTotal).
+ */
+async function checkWithAIModel(url) {
+  if (!LG_MODEL_URL) return null;
+  try {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 6000); // 6s max
+
+    const resp = await fetch(`${LG_MODEL_URL}/scan`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ url }),
+      signal: controller.signal,
+    });
+    clearTimeout(timeout);
+
+    if (!resp.ok) return null;
+    const data = await resp.json();
+
+    const { verdict, confidence } = data;
+    if (!verdict || confidence === undefined) return null;
+
+    // Only trust high-confidence verdicts
+    if (confidence >= LG_CONFIDENCE_THRESHOLD) {
+      return { verdict, confidence };
+    }
+    return null; // uncertain → let VirusTotal decide
+  } catch (e) {
+    // Network error, timeout, or Spaces cold start — fail silently
+    console.warn("[LinkGuard] AI model unavailable:", e.message);
+    return null;
+  }
+}
+
 async function scanUrl(url, includeVT) {
   await ensureListsLoaded();
 
@@ -392,20 +438,21 @@ async function scanUrl(url, includeVT) {
     return heuristic;
   }
 
-  // 4. AI Model — Phase 4 placeholder (not yet active)
-  // Uncomment and implement checkWithAIModel() once the HuggingFace model is published.
-  // Runs between heuristics and VirusTotal — expected to cut VT calls by ~80-90%.
-  //
-  // const { hfApiKey } = await chrome.storage.local.get("hfApiKey");
-  // if (hfApiKey && includeVT) {
-  //   const aiResult = await checkWithAIModel(url, hfApiKey);
-  //   if (aiResult && aiResult.score >= 0.90) {
-  //     const r = { verdict: aiResult.label, reason: `LinkGuard AI model (${(aiResult.score * 100).toFixed(0)}% confidence)` };
-  //     urlCache.set(url, { ...r, ts: Date.now() });
-  //     return r;
-  //   }
-  //   // score < 0.90 → uncertain → fall through to VirusTotal
-  // }
+  // 4. LinkGuard AI Model (SecureBERT hybrid classifier)
+  // Active once LG_MODEL_URL is set (after HuggingFace Spaces deployment).
+  // High-confidence verdicts (≥90%) skip VirusTotal — saves ~80-90% of VT quota.
+  if (LG_MODEL_URL && includeVT) {
+    const aiResult = await checkWithAIModel(url);
+    if (aiResult) {
+      const r = {
+        verdict: aiResult.verdict,
+        reason: `LinkGuard AI (${(aiResult.confidence * 100).toFixed(0)}% confidence)`,
+      };
+      urlCache.set(url, { ...r, ts: Date.now() });
+      return r;
+    }
+    // confidence < threshold → fall through to VirusTotal
+  }
 
   // 5. VirusTotal (click-time scans only)
   if (includeVT) {
