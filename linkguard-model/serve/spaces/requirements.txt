@@ -1,0 +1,6 @@
+fastapi>=0.110.0
+uvicorn[standard]>=0.29.0
+onnxruntime>=1.18.0
+transformers>=4.40.0
+numpy>=1.26.0
+python-multipart>=0.0.9

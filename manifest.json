@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "LinkGuard",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "Link safety scanner — scans links on click using VirusTotal, URLhaus, OpenPhish, ThreatFox, and a community blocklist.",
   "permissions": ["storage", "scripting", "tabs", "webNavigation", "alarms"],
   "host_permissions": [
@@ -9,7 +9,8 @@
     "https://www.virustotal.com/*",
     "https://urlhaus.abuse.ch/*",
     "https://openphish.com/*",
-    "https://threatfox-api.abuse.ch/*"
+    "https://threatfox-api.abuse.ch/*",
+    "https://*.hf.space/*"
   ],
   "background": { "service_worker": "background.js" },
   "content_scripts": [
