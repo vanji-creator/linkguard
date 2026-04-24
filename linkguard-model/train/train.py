@@ -133,10 +133,11 @@ def main(resume: str | None = None, backup_dir: str | None = None):
     train_ds = URLDataset(PROCESSED_DIR / "train.parquet", tokenizer)
     val_ds   = URLDataset(PROCESSED_DIR / "val.parquet",   tokenizer)
 
+    num_workers = 2
     train_loader = DataLoader(train_ds, batch_size=BATCH_SIZE, shuffle=True,
-                              num_workers=4, pin_memory=True)
+                              num_workers=num_workers, pin_memory=True)
     val_loader   = DataLoader(val_ds,   batch_size=BATCH_SIZE * 2, shuffle=False,
-                              num_workers=4, pin_memory=True)
+                              num_workers=num_workers, pin_memory=True)
 
     print(f"  Train: {len(train_ds):,} | Val: {len(val_ds):,}")
 
@@ -167,7 +168,7 @@ def main(resume: str | None = None, backup_dir: str | None = None):
         num_training_steps=total_steps
     )
 
-    scaler = torch.cuda.amp.GradScaler(enabled=(device.type == "cuda"))
+    scaler = torch.amp.GradScaler("cuda", enabled=(device.type == "cuda"))
 
     # ── Logging ───────────────────────────────────────────────────────────────
     log_path = MODEL_DIR / "training_log.csv"
@@ -204,7 +205,7 @@ def main(resume: str | None = None, backup_dir: str | None = None):
             url_features   = batch["url_features"].to(device)
             labels         = batch["label"].to(device)
 
-            with torch.cuda.amp.autocast(enabled=(device.type == "cuda")):
+            with torch.amp.autocast("cuda", enabled=(device.type == "cuda")):
                 logits = model(input_ids, attention_mask, url_features)
                 loss   = criterion(logits, labels) / GRAD_ACCUM
 
