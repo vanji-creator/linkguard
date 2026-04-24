@@ -8,9 +8,10 @@ Features:
   • Class-weighted loss to handle imbalance
   • Best checkpoint saved on val F1 (macro)
   • Gradient clipping
+  • Optional Google Drive backup after each best checkpoint
 
 Usage:
-    python train/train.py [--resume path/to/checkpoint]
+    python train/train.py [--resume path/to/checkpoint] [--backup-dir /content/drive/MyDrive/linkguard]
 
 Output:
     model_output/best_model/   — best checkpoint (PyTorch)
@@ -21,6 +22,7 @@ Output:
 import sys
 import csv
 import time
+import shutil
 import argparse
 from pathlib import Path
 
@@ -102,7 +104,19 @@ def evaluate(model, loader, criterion, device) -> dict:
             "preds": all_preds, "labels": all_labels}
 
 
-def main(resume: str | None = None):
+def backup_to_drive(src: Path, backup_dir: Path, epoch: int, val_f1: float):
+    """Copy best checkpoint to Drive. Safe to call even if Drive is slow."""
+    try:
+        dest = backup_dir / f"epoch{epoch}_f1{val_f1:.4f}"
+        if dest.exists():
+            shutil.rmtree(dest)
+        shutil.copytree(src, dest)
+        print(f"  ✓ Backed up to Drive: {dest}")
+    except Exception as e:
+        print(f"  ⚠ Drive backup failed (training continues): {e}")
+
+
+def main(resume: str | None = None, backup_dir: str | None = None):
     set_seed(SEED)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"\n=== LinkGuard Model Training ===")
@@ -150,7 +164,6 @@ def main(resume: str | None = None):
     warmup_steps = int(total_steps * WARMUP_RATIO)
     scheduler = get_cosine_schedule_with_warmup(
         optimizer, num_warmup_steps=warmup_steps,
-        num_training_cycles=0.5,
         num_training_steps=total_steps
     )
 
@@ -176,7 +189,6 @@ def main(resume: str | None = None):
             optimizer = make_optimizer(model)
             scheduler = get_cosine_schedule_with_warmup(
                 optimizer, num_warmup_steps=0,
-                num_training_cycles=0.5,
                 num_training_steps=(len(train_loader) // GRAD_ACCUM) * (NUM_EPOCHS - 2)
             )
             print("  All BERT layers unfrozen for epochs 3+")
@@ -230,6 +242,8 @@ def main(resume: str | None = None):
             torch.save(model.state_dict(), best_path / "model.pt")
             tokenizer.save_pretrained(best_path)
             print(f"  ✓ New best model saved (val_f1={best_f1:.4f})")
+            if backup_dir:
+                backup_to_drive(best_path, Path(backup_dir), epoch, best_f1)
 
     log_file.close()
 
@@ -245,5 +259,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--resume", type=str, default=None,
                         help="Path to a model.pt checkpoint to resume from")
+    parser.add_argument("--backup-dir", type=str, default=None,
+                        help="Google Drive folder to back up best checkpoints (e.g. /content/drive/MyDrive/linkguard)")
     args = parser.parse_args()
-    main(resume=args.resume)
+    main(resume=args.resume, backup_dir=args.backup_dir)
