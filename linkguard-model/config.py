@@ -19,7 +19,7 @@ ONNX_DIR.mkdir(parents=True, exist_ok=True)
 # ── Data sources (automated downloads) ────────────────────────────────────────
 URLHAUS_URL       = "https://urlhaus.abuse.ch/downloads/text_recent/"
 OPENPHISH_URL     = "https://openphish.com/feed.txt"
-# ThreatFox: bulk CSV export (no auth) — replaces the JSON API which now requires a key
+# ThreatFox: bulk CSV export, plain text (no zip, no auth)
 THREATFOX_CSV_URL = "https://threatfox.abuse.ch/export/csv/recent/"
 # Phishing.Database: 400K+ active phishing links, maintained on GitHub, no auth
 PHISHING_DB_URL   = "https://raw.githubusercontent.com/mitchellkrogza/Phishing.Database/master/phishing-links-ACTIVE.txt"
