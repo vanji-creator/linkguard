@@ -98,10 +98,11 @@ def collect_threatfox():
             for row in reader:
                 if not row or row[0].startswith("#"):
                     continue
-                if len(row) < 3:
+                # columns: first_seen, ioc_id, ioc_value, ioc_type, ...
+                if len(row) < 4:
                     continue
-                ioc      = row[1].strip().strip('"')
-                ioc_type = row[2].strip().strip('"').lower()
+                ioc      = row[2].strip().strip('"')
+                ioc_type = row[3].strip().strip('"').lower()
                 if ioc_type == "url":
                     urls.append(ioc)
                 elif ioc_type == "domain":
