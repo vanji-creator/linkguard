@@ -17,11 +17,13 @@ MODEL_DIR.mkdir(parents=True, exist_ok=True)
 ONNX_DIR.mkdir(parents=True, exist_ok=True)
 
 # ── Data sources (automated downloads) ────────────────────────────────────────
-URLHAUS_URL    = "https://urlhaus.abuse.ch/downloads/text_recent/"
-OPENPHISH_URL  = "https://openphish.com/feed.txt"
-THREATFOX_URL  = "https://threatfox-api.abuse.ch/api/v1/"
-PHISHSTATS_URL = "https://phishstats.info/phish_score.csv"
-TRANCO_URL     = "https://tranco-list.eu/top-1m.csv.zip"
+URLHAUS_URL       = "https://urlhaus.abuse.ch/downloads/text_recent/"
+OPENPHISH_URL     = "https://openphish.com/feed.txt"
+# ThreatFox: bulk CSV export (no auth) — replaces the JSON API which now requires a key
+THREATFOX_CSV_URL = "https://threatfox.abuse.ch/export/csv/recent/"
+# Phishing.Database: 400K+ active phishing links, maintained on GitHub, no auth
+PHISHING_DB_URL   = "https://raw.githubusercontent.com/mitchellkrogza/Phishing.Database/master/phishing-links-ACTIVE.txt"
+TRANCO_URL        = "https://tranco-list.eu/top-1m.csv.zip"
 
 # ── Labels ────────────────────────────────────────────────────────────────────
 LABEL2ID = {"safe": 0, "suspicious": 1, "dangerous": 2}
@@ -51,9 +53,11 @@ VAL_RATIO   = 0.10
 TEST_RATIO  = 0.10
 
 # Cap per class to keep training manageable on a single GPU (None = no cap)
-MAX_SAFE_SAMPLES      = 300_000
-MAX_DANGEROUS_SAMPLES = 300_000
+MAX_DANGEROUS_SAMPLES  = 300_000
 MAX_SUSPICIOUS_SAMPLES = 50_000
+# Safe cap is set dynamically in preprocess.py to max 2× dangerous count
+# so class ratio never exceeds 1:2 regardless of how many sources succeed.
+MAX_SAFE_SAMPLES       = None   # handled dynamically
 
 # ── HuggingFace ────────────────────────────────────────────────────────────────
 HF_REPO  = "linkguard/url-safety-classifier"   # your HF repo (update before push)
