@@ -79,45 +79,39 @@ def collect_threatfox():
     ThreatFox bulk CSV export — no API key needed.
     Format: id,ioc,ioc_type,threat_type,fk_malware,malware_alias,...
     We extract rows where ioc_type is 'url' or 'domain'.
+    The endpoint returns plain-text CSV (not zipped).
     """
     dest = RAW_DIR / "threatfox.txt"
     if dest.exists():
         print(f"  ✓ ThreatFox already present — skipping")
         return
 
-    zip_dest = RAW_DIR / "_threatfox.zip"
-    ok = _download(THREATFOX_CSV_URL, zip_dest, "ThreatFox bulk CSV (zipped)")
+    raw_dest = RAW_DIR / "_threatfox_raw.csv"
+    ok = _download(THREATFOX_CSV_URL, raw_dest, "ThreatFox bulk CSV")
     if not ok:
         return
 
-    print("  Extracting ThreatFox zip...")
     urls = []
     try:
-        with zipfile.ZipFile(zip_dest) as zf:
-            csv_name = next(
-                (n for n in zf.namelist() if n.endswith(".csv")),
-                zf.namelist()[0]
-            )
-            with zf.open(csv_name) as f:
-                text = io.TextIOWrapper(f, encoding="utf-8", errors="ignore")
-                reader = csv.reader(text)
-                for row in reader:
-                    if not row or row[0].startswith("#"):
-                        continue
-                    if len(row) < 3:
-                        continue
-                    ioc      = row[1].strip().strip('"')
-                    ioc_type = row[2].strip().strip('"').lower()
-                    if ioc_type == "url":
-                        urls.append(ioc)
-                    elif ioc_type == "domain":
-                        urls.append("http://" + ioc)
+        with open(raw_dest, encoding="utf-8", errors="ignore") as f:
+            reader = csv.reader(f)
+            for row in reader:
+                if not row or row[0].startswith("#"):
+                    continue
+                if len(row) < 3:
+                    continue
+                ioc      = row[1].strip().strip('"')
+                ioc_type = row[2].strip().strip('"').lower()
+                if ioc_type == "url":
+                    urls.append(ioc)
+                elif ioc_type == "domain":
+                    urls.append("http://" + ioc)
     except Exception as e:
-        print(f"  ✗ ThreatFox extraction failed: {e}")
-        zip_dest.unlink(missing_ok=True)
+        print(f"  ✗ ThreatFox parsing failed: {e}")
+        raw_dest.unlink(missing_ok=True)
         return
 
-    zip_dest.unlink(missing_ok=True)
+    raw_dest.unlink(missing_ok=True)
     with open(dest, "w") as f:
         f.write("\n".join(urls))
     print(f"  ✓ ThreatFox → {dest.name} ({len(urls):,} URLs/domains)")
