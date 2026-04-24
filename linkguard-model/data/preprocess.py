@@ -21,7 +21,6 @@ Output files:
 
 import sys
 import re
-import json
 import random
 from pathlib import Path
 from urllib.parse import urlparse
@@ -110,57 +109,33 @@ def load_openphish() -> pd.DataFrame:
 
 
 def load_threatfox() -> pd.DataFrame:
-    """ThreatFox JSON — extract URLs from IOC data."""
-    path = RAW_DIR / "threatfox.json"
+    """ThreatFox — plain text file produced by collect.py from bulk CSV."""
+    path = RAW_DIR / "threatfox.txt"
     if not path.exists():
         print("  ⚠  ThreatFox file not found — run collect.py first")
         return pd.DataFrame(columns=["url", "label"])
 
-    with open(path) as f:
-        data = json.load(f)
-
-    iocs = data.get("data", [])
-    urls = []
-    for ioc in iocs:
-        ioc_type = ioc.get("ioc_type", "")
-        ioc_val  = ioc.get("ioc", "")
-        if ioc_type in ("url", "domain") and ioc_val:
-            if ioc_type == "domain":
-                ioc_val = "http://" + ioc_val
-            urls.append(ioc_val)
+    with open(path, encoding="utf-8", errors="ignore") as f:
+        urls = [l.strip() for l in f if l.strip()]
 
     df = pd.DataFrame({"url": urls, "label": "dangerous"})
     print(f"  ThreatFox: {len(df):,} URLs/domains")
     return df
 
 
-def load_phishstats() -> pd.DataFrame:
-    """
-    PhishStats CSV — columns: #date, score, url, ip
-    We keep score >= 5 (confirmed by multiple sources, highest confidence).
-    """
-    path = RAW_DIR / "phishstats.csv"
+def load_phishing_database() -> pd.DataFrame:
+    """mitchellkrogza/Phishing.Database — one URL per line, plain text."""
+    path = RAW_DIR / "phishing_database.txt"
     if not path.exists():
-        print("  ⚠  PhishStats file not found — run collect.py first")
+        print("  ⚠  Phishing.Database file not found — run collect.py first")
         return pd.DataFrame(columns=["url", "label"])
 
-    try:
-        # Skip comment lines starting with #
-        df_raw = pd.read_csv(
-            path,
-            comment="#",
-            header=None,
-            names=["date", "score", "url", "ip"],
-            on_bad_lines="skip",
-        )
-        # Keep only high-confidence phishing (score 5-10)
-        df_raw = df_raw[pd.to_numeric(df_raw["score"], errors="coerce").fillna(0) >= 5]
-        df = pd.DataFrame({"url": df_raw["url"].astype(str), "label": "dangerous"})
-        print(f"  PhishStats: {len(df):,} URLs (score >= 5)")
-        return df
-    except Exception as e:
-        print(f"  ⚠  PhishStats load error: {e}")
-        return pd.DataFrame(columns=["url", "label"])
+    with open(path, encoding="utf-8", errors="ignore") as f:
+        urls = [l.strip() for l in f if l.strip() and not l.startswith("#")]
+
+    df = pd.DataFrame({"url": urls, "label": "dangerous"})
+    print(f"  Phishing.Database: {len(df):,} URLs")
+    return df
 
 
 def load_tranco() -> pd.DataFrame:
@@ -196,7 +171,7 @@ def main():
         load_urlhaus(),
         load_openphish(),
         load_threatfox(),
-        load_phishstats(),
+        load_phishing_database(),
         load_tranco(),
     ]
     df = pd.concat([f for f in frames if not f.empty], ignore_index=True)
@@ -218,15 +193,29 @@ def main():
     print(f"  After dedup: {len(df):,} URLs")
 
     print("\n[4/5] Balancing classes...")
-    caps = {"safe": MAX_SAFE_SAMPLES, "dangerous": MAX_DANGEROUS_SAMPLES,
-            "suspicious": MAX_SUSPICIOUS_SAMPLES}
-    parts = []
-    for label, cap in caps.items():
-        subset = df[df["label"] == label]
-        if cap and len(subset) > cap:
-            subset = subset.sample(cap, random_state=SEED)
-        parts.append(subset)
+
+    # Cap dangerous first, then set safe cap dynamically to 2× dangerous
+    # so class ratio never exceeds 1:2 regardless of source failures.
+    dangerous_subset = df[df["label"] == "dangerous"]
+    if MAX_DANGEROUS_SAMPLES and len(dangerous_subset) > MAX_DANGEROUS_SAMPLES:
+        dangerous_subset = dangerous_subset.sample(MAX_DANGEROUS_SAMPLES, random_state=SEED)
+
+    dynamic_safe_cap = min(len(dangerous_subset) * 2,
+                           MAX_SAFE_SAMPLES if MAX_SAFE_SAMPLES else 10_000_000)
+    safe_subset = df[df["label"] == "safe"]
+    if len(safe_subset) > dynamic_safe_cap:
+        safe_subset = safe_subset.sample(dynamic_safe_cap, random_state=SEED)
+
+    suspicious_subset = df[df["label"] == "suspicious"]
+    if MAX_SUSPICIOUS_SAMPLES and len(suspicious_subset) > MAX_SUSPICIOUS_SAMPLES:
+        suspicious_subset = suspicious_subset.sample(MAX_SUSPICIOUS_SAMPLES, random_state=SEED)
+
+    for label, subset in [("dangerous", dangerous_subset),
+                           ("safe", safe_subset),
+                           ("suspicious", suspicious_subset)]:
         print(f"  {label:12s}: {len(subset):>8,}")
+
+    parts = [dangerous_subset, safe_subset, suspicious_subset]
 
     df = pd.concat(parts, ignore_index=True).sample(frac=1, random_state=SEED)
     df["label_id"] = df["label"].map({"safe": 0, "suspicious": 1, "dangerous": 2})
