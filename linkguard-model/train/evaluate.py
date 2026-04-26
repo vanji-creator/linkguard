@@ -163,7 +163,13 @@ def main(checkpoint: str | None = None):
 
     # ── Classification report ─────────────────────────────────────────────────
     class_names = [ID2LABEL[i] for i in range(NUM_LABELS)]
-    report = classification_report(labels, preds, target_names=class_names, digits=4)
+    report = classification_report(
+        labels, preds,
+        labels=list(range(NUM_LABELS)),
+        target_names=class_names,
+        digits=4,
+        zero_division=0,
+    )
     print(f"\n{report}")
     report_path = MODEL_DIR / "classification_report.txt"
     with open(report_path, "w") as f:
