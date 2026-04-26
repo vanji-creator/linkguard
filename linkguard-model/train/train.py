@@ -116,7 +116,7 @@ def backup_to_drive(src: Path, backup_dir: Path, epoch: int, val_f1: float):
         print(f"  ⚠ Drive backup failed (training continues): {e}")
 
 
-def main(resume: str | None = None, backup_dir: str | None = None):
+def main(resume: str | None = None, backup_dir: str | None = None, start_epoch: int = 1):
     set_seed(SEED)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"\n=== LinkGuard Model Training ===")
@@ -150,9 +150,13 @@ def main(resume: str | None = None, backup_dir: str | None = None):
     model = model.to(device)
     print(f"  {count_params(model)}")
 
-    # Freeze bottom 8 BERT layers for first 2 epochs
-    model.freeze_bert_layers(num_layers_to_freeze=8)
-    print("  BERT bottom-8 layers frozen for warm-up epochs 1-2")
+    # Freeze bottom 8 BERT layers for warm-up epochs (skip if resuming past epoch 2)
+    if start_epoch <= 2:
+        model.freeze_bert_layers(num_layers_to_freeze=8)
+        print("  BERT bottom-8 layers frozen for warm-up epochs 1-2")
+    else:
+        model.unfreeze_all()
+        print(f"  Resuming at epoch {start_epoch} — all BERT layers unfrozen")
 
     # ── Training setup ────────────────────────────────────────────────────────
     class_weights = get_class_weights(train_ds, device)
@@ -181,10 +185,10 @@ def main(resume: str | None = None, backup_dir: str | None = None):
 
     # ── Training loop ─────────────────────────────────────────────────────────
     global_step = 0
-    for epoch in range(1, NUM_EPOCHS + 1):
+    for epoch in range(start_epoch, NUM_EPOCHS + 1):
 
-        # Unfreeze all BERT layers after epoch 2
-        if epoch == 3:
+        # Unfreeze all BERT layers after epoch 2 (only if reaching it from a fresh start)
+        if epoch == 3 and start_epoch <= 2:
             model.unfreeze_all()
             # Rebuild optimizer so unfrozen params are included
             optimizer = make_optimizer(model)
@@ -261,6 +265,8 @@ if __name__ == "__main__":
     parser.add_argument("--resume", type=str, default=None,
                         help="Path to a model.pt checkpoint to resume from")
     parser.add_argument("--backup-dir", type=str, default=None,
-                        help="Google Drive folder to back up best checkpoints (e.g. /content/drive/MyDrive/linkguard)")
+                        help="Folder to back up best checkpoints (e.g. /kaggle/working/checkpoints)")
+    parser.add_argument("--start-epoch", type=int, default=1,
+                        help="Epoch number to start from when resuming (e.g. 3 if resuming from epoch 2's checkpoint)")
     args = parser.parse_args()
-    main(resume=args.resume, backup_dir=args.backup_dir)
+    main(resume=args.resume, backup_dir=args.backup_dir, start_epoch=args.start_epoch)

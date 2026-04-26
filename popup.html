@@ -230,6 +230,13 @@
 
       .field:last-of-type { margin-bottom: 0; }
 
+      .hint {
+        margin-top: 6px;
+        font-size: 11px;
+        color: var(--text-2);
+        line-height: 1.4;
+      }
+
       .field label {
         display: block;
         font-size: 11px;
@@ -505,10 +512,11 @@
     <!-- ── Settings ── -->
     <div id="panel-settings" class="panel" style="display:none">
 
-      <div class="section-title">VirusTotal</div>
+      <div class="section-title">VirusTotal (optional)</div>
       <div class="field">
         <label>API Key</label>
         <input id="vtKey" class="input" type="password" placeholder="Paste your VT API key…" />
+        <div class="hint">Optional second-opinion scanner. Used only when the LinkGuard AI is unsure (&lt;90% confidence). Get a free key at virustotal.com.</div>
       </div>
 
       <div class="section-title">Community Blocklist</div>
@@ -577,7 +585,8 @@
         <div class="pipeline-item"><div class="pipeline-num">4</div>ThreatFox — threat IOCs</div>
         <div class="pipeline-item"><div class="pipeline-num">5</div>Community blocklist (Supabase)</div>
         <div class="pipeline-item"><div class="pipeline-num">6</div>India scam heuristics</div>
-        <div class="pipeline-item"><div class="pipeline-num">7</div>VirusTotal — API key required</div>
+        <div class="pipeline-item"><div class="pipeline-num">7</div>LinkGuard AI Model</div>
+        <div class="pipeline-item"><div class="pipeline-num">8</div>VirusTotal (optional, only if AI is unsure)</div>
       </div>
 
       <div class="section-title">Verdicts</div>

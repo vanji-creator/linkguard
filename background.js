@@ -438,36 +438,52 @@ async function scanUrl(url, includeVT) {
     return heuristic;
   }
 
-  // 4. LinkGuard AI Model (SecureBERT hybrid classifier)
-  // Active once LG_MODEL_URL is set (after HuggingFace Spaces deployment).
-  // High-confidence verdicts (≥90%) skip VirusTotal — saves ~80-90% of VT quota.
-  if (LG_MODEL_URL && includeVT) {
+  // Pre-scan (hover): only local checks above. Don't call AI/VT.
+  if (!includeVT) {
+    urlCache.set(url, { ...heuristic, ts: Date.now() });
+    return heuristic;
+  }
+
+  // 4. LinkGuard AI Model (primary scanner at click time)
+  let aiVerdict = null;
+  let aiConfidence = 0;
+  if (LG_MODEL_URL) {
     const aiResult = await checkWithAIModel(url);
     if (aiResult) {
-      const r = {
-        verdict: aiResult.verdict,
-        reason: `LinkGuard AI (${(aiResult.confidence * 100).toFixed(0)}% confidence)`,
-      };
-      urlCache.set(url, { ...r, ts: Date.now() });
-      return r;
+      aiVerdict = aiResult.verdict;
+      aiConfidence = aiResult.confidence;
+      // High confidence → trust AI, skip VT
+      if (aiConfidence >= LG_CONFIDENCE_THRESHOLD) {
+        const r = {
+          verdict: aiVerdict,
+          reason: `LinkGuard AI (${(aiConfidence * 100).toFixed(0)}% confidence)`,
+        };
+        urlCache.set(url, { ...r, ts: Date.now() });
+        return r;
+      }
     }
-    // confidence < threshold → fall through to VirusTotal
   }
 
-  // 5. VirusTotal (click-time scans only)
-  if (includeVT) {
-    const { vtApiKey } = await chrome.storage.local.get("vtApiKey");
-    if (vtApiKey) {
-      const vtResult = await checkVirusTotal(url, vtApiKey);
-      urlCache.set(url, { ...vtResult, ts: Date.now() });
-      return vtResult;
-    }
-    return { verdict: "unknown", reason: "No VirusTotal API key configured — add it in Settings" };
+  // 5. VirusTotal (optional — only if user configured a key)
+  const { vtApiKey } = await chrome.storage.local.get("vtApiKey");
+  if (vtApiKey) {
+    const vtResult = await checkVirusTotal(url, vtApiKey);
+    urlCache.set(url, { ...vtResult, ts: Date.now() });
+    return vtResult;
   }
 
-  // Pre-scan: return heuristic result (safe)
-  urlCache.set(url, { ...heuristic, ts: Date.now() });
-  return heuristic;
+  // No VT key: fall back to AI verdict (even low confidence) if available
+  if (aiVerdict) {
+    const r = {
+      verdict: aiVerdict,
+      reason: `LinkGuard AI (${(aiConfidence * 100).toFixed(0)}% — low confidence; add VirusTotal key in Settings for extra check)`,
+    };
+    urlCache.set(url, { ...r, ts: Date.now() });
+    return r;
+  }
+
+  // No AI, no VT — best we can do is the heuristic result
+  return { verdict: "unknown", reason: "AI model unavailable. Add a VirusTotal API key in Settings for extra scanning." };
 }
 
 // ═══════════════════════════════════════════════════════
