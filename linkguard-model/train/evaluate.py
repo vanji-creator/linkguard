@@ -60,7 +60,7 @@ def run_inference(model, loader, device):
 
 def plot_confusion_matrix(preds, labels, out_path: Path):
     class_names = [ID2LABEL[i] for i in range(NUM_LABELS)]
-    cm = confusion_matrix(labels, preds, normalize="true")
+    cm = confusion_matrix(labels, preds, labels=list(range(NUM_LABELS)), normalize="true")
     disp = ConfusionMatrixDisplay(confusion_matrix=cm, display_labels=class_names)
     fig, ax = plt.subplots(figsize=(7, 6))
     disp.plot(ax=ax, colorbar=True, cmap="Blues", values_format=".2f")
@@ -78,6 +78,9 @@ def plot_roc_curves(probs, labels, out_path: Path):
 
     for i, (name, color) in enumerate(zip(class_names, colors)):
         y_bin = (labels == i).astype(int)
+        if y_bin.sum() == 0:
+            print(f"  Skipping ROC for '{name}' — no samples in test set")
+            continue
         fpr, tpr, _ = roc_curve(y_bin, probs[:, i])
         auc = roc_auc_score(y_bin, probs[:, i])
         ax.plot(fpr, tpr, color=color, lw=2,
