@@ -149,6 +149,8 @@ def main(quantize: bool = True):
     print("Loading model...")
     model = HybridURLClassifier()
     state_dict = torch.load(checkpoint_path, map_location="cpu")
+    print(f"  Checkpoint keys: {len(state_dict)}")
+    print(f"  Classifier bias (should be non-zero): {state_dict.get('classifier.5.bias', 'KEY NOT FOUND')}")
     missing, unexpected = model.load_state_dict(state_dict, strict=False)
     if missing:
         print(f"  ⚠ Missing keys: {missing}")
