@@ -109,6 +109,30 @@ def quantize_onnx(input_path: Path, output_path: Path):
     print(f"  ✓ INT8 model ({size_mb:.1f} MB)")
 
 
+def _sanity_check(model: HybridURLClassifier, tokenizer: AutoTokenizer):
+    """Run PyTorch inference on test URLs to verify weights loaded correctly."""
+    from serve.features import extract as extract_features
+
+    test_urls = [
+        ("https://www.google.com/",                          "safe"),
+        ("http://paypal-secure-login.xyz/verify?token=abc",  "dangerous"),
+    ]
+    id2label = {0: "safe", 1: "suspicious", 2: "dangerous"}
+
+    for url, expected in test_urls:
+        enc   = tokenizer(url, max_length=MAX_SEQ_LEN, padding="max_length",
+                          truncation=True, return_tensors="pt")
+        feats = torch.tensor(extract_features(url)).unsqueeze(0)
+
+        with torch.no_grad():
+            logits = model(enc["input_ids"], enc["attention_mask"], feats)
+        probs = torch.softmax(logits, dim=-1)[0]
+        pred  = id2label[int(probs.argmax())]
+        conf  = probs.max().item()
+        ok    = "✓" if pred == expected else "✗ WRONG"
+        print(f"  {ok} {url[:55]:<55} → {pred} ({conf:.3f})  [expected: {expected}]")
+
+
 def main(quantize: bool = True):
     print("\n=== LinkGuard — ONNX Export ===")
 
@@ -124,8 +148,15 @@ def main(quantize: bool = True):
 
     print("Loading model...")
     model = HybridURLClassifier()
-    model.load_state_dict(torch.load(checkpoint_path, map_location="cpu"))
+    state_dict = torch.load(checkpoint_path, map_location="cpu")
+    missing, unexpected = model.load_state_dict(state_dict, strict=False)
+    if missing:
+        print(f"  ⚠ Missing keys: {missing}")
     model.eval()
+
+    # Sanity check: run PyTorch inference before ONNX export
+    print("\nPyTorch sanity check...")
+    _sanity_check(model, tokenizer)
 
     onnx_path    = ONNX_DIR / "model.onnx"
     int8_path    = ONNX_DIR / "model_int8.onnx"
