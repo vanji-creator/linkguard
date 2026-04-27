@@ -55,6 +55,7 @@ def export_onnx(model: HybridURLClassifier, out_path: Path):
             "logits":         {0: "batch"},
         },
         do_constant_folding=True,
+        dynamo=False,
     )
     size_mb = out_path.stat().st_size / 1e6
     print(f"  ✓ Exported ({size_mb:.1f} MB)")
