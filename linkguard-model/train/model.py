@@ -66,7 +66,7 @@ class HybridURLClassifier(nn.Module):
                  dropout: float = DROPOUT):
         super().__init__()
 
-        self.bert = AutoModel.from_pretrained(base_model)
+        self.bert = AutoModel.from_pretrained(base_model, attn_implementation="eager")
         hidden_size = self.bert.config.hidden_size  # 768 for BERT-base
 
         self.feature_branch = URLFeatureMLP(

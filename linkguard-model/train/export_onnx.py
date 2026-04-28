@@ -113,9 +113,20 @@ def _sanity_check(model: HybridURLClassifier, tokenizer: AutoTokenizer):
     """Run PyTorch inference on test URLs to verify weights loaded correctly."""
     from serve.features import extract as extract_features
 
+    # Smoking-gun test for dataset shortcut hypothesis.
+    # If the model learned "bare domain → safe, has path/subdomain → dangerous"
+    # from Tranco's bare-domain safes vs. URLhaus's full-path attacks, then:
+    #   - https://google.com           → safe        (Tranco-style, matches training)
+    #   - https://www.google.com/      → dangerous   (subdomain + slash → looks attacky)
+    #   - https://google.com/search    → dangerous   (has path → looks attacky)
+    #   - http://malware.tk            → safe        (bare → false negative)
     test_urls = [
+        ("https://google.com",                               "safe"),
         ("https://www.google.com/",                          "safe"),
+        ("https://google.com/search",                        "safe"),
+        ("https://github.com/anthropics/claude-code/pulls",  "safe"),
         ("http://paypal-secure-login.xyz/verify?token=abc",  "dangerous"),
+        ("http://malware.tk",                                "dangerous"),
     ]
     id2label = {0: "safe", 1: "suspicious", 2: "dangerous"}
 
@@ -131,6 +142,7 @@ def _sanity_check(model: HybridURLClassifier, tokenizer: AutoTokenizer):
         conf  = probs.max().item()
         ok    = "✓" if pred == expected else "✗ WRONG"
         print(f"  {ok} {url[:55]:<55} → {pred} ({conf:.3f})  [expected: {expected}]")
+        print(f"     logits: {logits[0].tolist()}")
 
 
 def main(quantize: bool = True):
