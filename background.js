@@ -1,5 +1,8 @@
 console.log("LinkGuard background service worker started");
 
+// On-device AI model inference engine (pure JS, no network)
+importScripts("model.js");
+
 // ═══════════════════════════════════════════════════════
 // CONFIG
 // ═══════════════════════════════════════════════════════
@@ -259,13 +262,13 @@ function normalizeUrl(url) {
 function checkLocalLists(url) {
   const norm = normalizeUrl(url);
   if (urlhausSet.has(url) || urlhausSet.has(norm))
-    return { verdict: "dangerous", reason: "Found in URLhaus malware database" };
+    return { verdict: "dangerous", reason: "Found in URLhaus malware database", source: "urlhaus" };
   if (openphishSet.has(url) || openphishSet.has(norm))
-    return { verdict: "dangerous", reason: "Found in OpenPhish phishing database" };
+    return { verdict: "dangerous", reason: "Found in OpenPhish phishing database", source: "openphish" };
   if (threatfoxSet.has(url) || threatfoxSet.has(norm))
-    return { verdict: "dangerous", reason: "Found in ThreatFox threat database" };
+    return { verdict: "dangerous", reason: "Found in ThreatFox threat database", source: "threatfox" };
   if (communitySet.has(url) || communitySet.has(norm))
-    return { verdict: "dangerous", reason: "Reported by the LinkGuard community" };
+    return { verdict: "dangerous", reason: "Reported by the LinkGuard community", source: "community" };
   return null;
 }
 
@@ -288,19 +291,19 @@ function runHeuristics(url) {
     ];
     for (const pat of suspiciousPatterns) {
       if (pat.test(host) || pat.test(u.pathname))
-        return { verdict: "suspicious", reason: "Matches known India scam pattern" };
+        return { verdict: "suspicious", reason: "Matches known India scam pattern", source: "heuristic" };
     }
 
     const sketchyTLDs = [".tk", ".ml", ".ga", ".cf", ".gq", ".xyz", ".top", ".buzz", ".click"];
     if (sketchyTLDs.some((tld) => host.endsWith(tld)))
-      return { verdict: "suspicious", reason: "High-risk domain extension" };
+      return { verdict: "suspicious", reason: "High-risk domain extension", source: "heuristic" };
 
     if (host.split(".").length > 4)
-      return { verdict: "suspicious", reason: "Unusually deep subdomain" };
+      return { verdict: "suspicious", reason: "Unusually deep subdomain", source: "heuristic" };
 
-    return { verdict: "safe", reason: null };
+    return { verdict: "safe", reason: null, source: "heuristic" };
   } catch {
-    return { verdict: "safe", reason: null };
+    return { verdict: "safe", reason: null, source: "heuristic" };
   }
 }
 
@@ -317,12 +320,12 @@ function interpretVTStats(stats) {
   const malicious = stats.malicious || 0;
   const suspicious = stats.suspicious || 0;
   if (malicious >= 2)
-    return { verdict: "dangerous", reason: `Flagged by ${malicious} security engines on VirusTotal` };
+    return { verdict: "dangerous", reason: `Flagged by ${malicious} security engines on VirusTotal`, source: "virustotal" };
   if (malicious === 1)
-    return { verdict: "suspicious", reason: "Flagged by 1 security engine on VirusTotal" };
+    return { verdict: "suspicious", reason: "Flagged by 1 security engine on VirusTotal", source: "virustotal" };
   if (suspicious > 0)
-    return { verdict: "suspicious", reason: `Marked suspicious by ${suspicious} engine${suspicious > 1 ? "s" : ""} on VirusTotal` };
-  return { verdict: "safe", reason: null };
+    return { verdict: "suspicious", reason: `Marked suspicious by ${suspicious} engine${suspicious > 1 ? "s" : ""} on VirusTotal`, source: "virustotal" };
+  return { verdict: "safe", reason: null, source: "virustotal" };
 }
 
 async function checkVirusTotal(url, apiKey) {
@@ -332,7 +335,7 @@ async function checkVirusTotal(url, apiKey) {
     const cacheResp = await fetch(`${VT_BASE}/urls/${urlId}`, {
       headers: { "x-apikey": apiKey },
     });
-    if (cacheResp.status === 429) return { verdict: "unknown", reason: "Rate limit reached — could not verify this link" };
+    if (cacheResp.status === 429) return { verdict: "unknown", reason: "Rate limit reached — could not verify this link", source: "virustotal" };
     if (cacheResp.ok) {
       const data = await cacheResp.json();
       const stats = data?.data?.attributes?.last_analysis_stats;
@@ -347,12 +350,12 @@ async function checkVirusTotal(url, apiKey) {
       headers: { "x-apikey": apiKey, "Content-Type": "application/x-www-form-urlencoded" },
       body: body.toString(),
     });
-    if (submitResp.status === 429) return { verdict: "unknown", reason: "Rate limit reached — could not verify this link" };
-    if (!submitResp.ok) return { verdict: "unknown", reason: `VirusTotal error (${submitResp.status})` };
+    if (submitResp.status === 429) return { verdict: "unknown", reason: "Rate limit reached — could not verify this link", source: "virustotal" };
+    if (!submitResp.ok) return { verdict: "unknown", reason: `VirusTotal error (${submitResp.status})`, source: "virustotal" };
 
     const submitData = await submitResp.json();
     const analysisId = submitData?.data?.id;
-    if (!analysisId) return { verdict: "unknown", reason: "VirusTotal did not return an analysis ID" };
+    if (!analysisId) return { verdict: "unknown", reason: "VirusTotal did not return an analysis ID", source: "virustotal" };
 
     // Poll for completed analysis (max 3 tries, 2s apart)
     for (let i = 0; i < 3; i++) {
@@ -360,7 +363,7 @@ async function checkVirusTotal(url, apiKey) {
       const pollResp = await fetch(`${VT_BASE}/analyses/${analysisId}`, {
         headers: { "x-apikey": apiKey },
       });
-      if (pollResp.status === 429) return { verdict: "unknown", reason: "Rate limit reached — could not verify this link" };
+      if (pollResp.status === 429) return { verdict: "unknown", reason: "Rate limit reached — could not verify this link", source: "virustotal" };
       if (!pollResp.ok) continue;
       const result = await pollResp.json();
       if (result?.data?.attributes?.status === "completed") {
@@ -368,9 +371,9 @@ async function checkVirusTotal(url, apiKey) {
       }
     }
 
-    return { verdict: "unknown", reason: "Scan timed out — could not fully verify this link" };
+    return { verdict: "unknown", reason: "Scan timed out — could not fully verify this link", source: "virustotal" };
   } catch (e) {
-    return { verdict: "unknown", reason: "Could not reach VirusTotal" };
+    return { verdict: "unknown", reason: "Could not reach VirusTotal", source: "virustotal" };
   }
 }
 
@@ -415,13 +418,54 @@ async function checkWithAIModel(url) {
   }
 }
 
-async function scanUrl(url, includeVT) {
+/**
+ * Lazy single-flight loader for the on-device model weights
+ * (same pattern as ensureListsLoaded). ~2MB JSON bundled with the
+ * extension, parsed once per service-worker lifetime.
+ */
+let modelReadyPromise = null;
+function ensureModelLoaded() {
+  if (!modelReadyPromise) {
+    modelReadyPromise = fetch(chrome.runtime.getURL("model/linkguard_model_v1.json"))
+      .then((resp) => resp.json())
+      .then((modelJson) => LinkGuardModel.init(modelJson))
+      .catch((e) => {
+        console.error("[LinkGuard] on-device model failed to load:", e);
+        modelReadyPromise = null; // allow retry on next scan
+        throw e;
+      });
+  }
+  return modelReadyPromise;
+}
+
+/**
+ * Run the on-device model. Instant (<1ms), free, private — the URL
+ * never leaves the device. Returns { p, confidence, verdict } or null
+ * on any failure (caller falls through to VirusTotal).
+ */
+async function checkWithLocalModel(url) {
+  try {
+    await ensureModelLoaded();
+    return LinkGuardModel.classify(url);
+  } catch (e) {
+    return null;
+  }
+}
+
+async function scanUrl(url, includeVT, force = false) {
   await ensureListsLoaded();
 
+  // force = user pressed "Scan again" — bypass the 1hr cache entirely
+  if (force) urlCache.delete(url);
+
   // 1. Cache
+  // "shallow" entries came from a hover pre-scan (local checks only) —
+  // a full click-time scan must NOT trust them, or the AI model and
+  // VirusTotal would never run for any link the user hovered first.
   const cached = urlCache.get(url);
-  if (cached && Date.now() - cached.ts < CACHE_TTL_MS) {
-    return { verdict: cached.verdict, reason: cached.reason };
+  if (cached && Date.now() - cached.ts < CACHE_TTL_MS && !(cached.shallow && includeVT)) {
+    const { ts, shallow, ...cachedResult } = cached;
+    return cachedResult;
   }
 
   // 2. Local blocklists
@@ -439,12 +483,45 @@ async function scanUrl(url, includeVT) {
   }
 
   // Pre-scan (hover): only local checks above. Don't call AI/VT.
+  // Cache as "shallow" so a real click-time scan re-runs the full pipeline.
   if (!includeVT) {
-    urlCache.set(url, { ...heuristic, ts: Date.now() });
+    urlCache.set(url, { ...heuristic, shallow: true, ts: Date.now() });
     return heuristic;
   }
 
-  // 4. LinkGuard AI Model (primary scanner at click time)
+  // 4. LinkGuard AI model — ON-DEVICE (primary scanner at click time)
+  //    Instant and private: inference runs locally, URL never leaves device.
+  let modelFallback = null;
+  const { modelEnabled } = await chrome.storage.local.get("modelEnabled");
+  if (modelEnabled !== false) {   // default ON, even before defaults are written
+    const modelResult = await checkWithLocalModel(url);
+    if (modelResult) {
+      // confidence = max(p, 1-p): how sure the model is either way
+      if (modelResult.confidence >= LG_CONFIDENCE_THRESHOLD) {
+        // ≥90% sure → trust the model, skip VirusTotal entirely
+        const r = {
+          verdict: modelResult.p >= 0.5 ? "dangerous" : "safe",
+          reason: `LinkGuard AI model — ${(modelResult.confidence * 100).toFixed(0)}% confident (checked on-device)`,
+          source: "model",
+          confidence: modelResult.confidence,
+        };
+        urlCache.set(url, { ...r, ts: Date.now() });
+        return r;
+      }
+      // unsure → hold the 3-way verdict; VirusTotal gets the final word,
+      // and this becomes the fallback if the user has no VT key
+      modelFallback = {
+        verdict: modelResult.verdict,
+        reason: modelResult.verdict === "suspicious"
+          ? "LinkGuard AI model is unsure about this link — add a VirusTotal key in Settings for a deeper check"
+          : `LinkGuard AI model — ${(modelResult.confidence * 100).toFixed(0)}% confident (low; add a VirusTotal key for a second opinion)`,
+        source: "model",
+        confidence: modelResult.confidence,
+      };
+    }
+  }
+
+  // 4b. Remote AI model API (secondary channel, disabled unless LG_MODEL_URL set)
   let aiVerdict = null;
   let aiConfidence = 0;
   if (LG_MODEL_URL) {
@@ -457,6 +534,8 @@ async function scanUrl(url, includeVT) {
         const r = {
           verdict: aiVerdict,
           reason: `LinkGuard AI (${(aiConfidence * 100).toFixed(0)}% confidence)`,
+          source: "remote-ai",
+          confidence: aiConfidence,
         };
         urlCache.set(url, { ...r, ts: Date.now() });
         return r;
@@ -472,18 +551,26 @@ async function scanUrl(url, includeVT) {
     return vtResult;
   }
 
-  // No VT key: fall back to AI verdict (even low confidence) if available
+  // No VT key: fall back to the on-device model's 3-way verdict
+  if (modelFallback) {
+    urlCache.set(url, { ...modelFallback, ts: Date.now() });
+    return modelFallback;
+  }
+
+  // No VT key: fall back to remote AI verdict (even low confidence) if available
   if (aiVerdict) {
     const r = {
       verdict: aiVerdict,
       reason: `LinkGuard AI (${(aiConfidence * 100).toFixed(0)}% — low confidence; add VirusTotal key in Settings for extra check)`,
+      source: "remote-ai",
+      confidence: aiConfidence,
     };
     urlCache.set(url, { ...r, ts: Date.now() });
     return r;
   }
 
-  // No AI, no VT — best we can do is the heuristic result
-  return { verdict: "unknown", reason: "AI model unavailable. Add a VirusTotal API key in Settings for extra scanning." };
+  // Model disabled/failed and no VT — best we can do is the heuristic result
+  return { verdict: "unknown", reason: "AI model disabled or unavailable. Add a VirusTotal API key in Settings for extra scanning.", source: "none" };
 }
 
 // ═══════════════════════════════════════════════════════
@@ -503,6 +590,7 @@ chrome.runtime.onInstalled.addListener(async () => {
   // Only set defaults for keys that don't exist yet — never overwrite user's saved settings
   const DEFAULTS = {
     vtApiKey: "",
+    modelEnabled: true,
     textExplainerEnabled: false,
     customApiKey: "",
     modelName: DEFAULT_MODEL,
@@ -564,39 +652,64 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
 
   if (request.action === "getSettings") {
     chrome.storage.local.get(
-      ["vtApiKey", "textExplainerEnabled", "customApiKey", "modelName", "supabaseUrl", "supabaseAnonKey"],
+      ["vtApiKey", "modelEnabled", "textExplainerEnabled", "customApiKey", "modelName", "supabaseUrl", "supabaseAnonKey"],
       (res) => sendResponse(res)
     );
     return true;
   }
 
   if (request.action === "saveSettings") {
-    const { vtApiKey, textExplainerEnabled, customApiKey, modelName, supabaseUrl, supabaseAnonKey } = request;
-    chrome.storage.local.set(
-      { vtApiKey, textExplainerEnabled, customApiKey, modelName, supabaseUrl, supabaseAnonKey },
-      () => sendResponse({ ok: true })
-    );
+    // Only write keys the sender actually included — a UI that stops
+    // sending a key (e.g. the removed Gemini fields) must never wipe it.
+    const SETTING_KEYS = ["vtApiKey", "modelEnabled", "textExplainerEnabled", "customApiKey", "modelName", "supabaseUrl", "supabaseAnonKey"];
+    const toSave = {};
+    for (const key of SETTING_KEYS) {
+      if (request[key] !== undefined) toSave[key] = request[key];
+    }
+    chrome.storage.local.set(toSave, () => sendResponse({ ok: true }));
     return true;
   }
 
-  // Pre-scan on hover: local lists + heuristics only, no VT, fire-and-forget
+  // Pre-scan on hover: local lists + heuristics only, no VT.
+  // Responds with the result so the page can badge known-bad links early.
   if (request.action === "preScanUrl" && sender.tab) {
-    scanUrl(request.url, false).catch(() => {});
-    return false;
+    scanUrl(request.url, false)
+      .then((result) => sendResponse(result))
+      .catch(() => sendResponse(null));
+    return true;
+  }
+
+  // Batch pre-scan at page load: local-only check of every intercepted
+  // link, responds with ONLY the flagged ones (suspicious/dangerous) so
+  // bad links show their color before the user even hovers.
+  if (request.action === "preScanBatch" && sender.tab) {
+    const urls = Array.isArray(request.urls) ? request.urls.slice(0, 300) : [];
+    Promise.all(
+      urls.map((u) => scanUrl(u, false).then((r) => [u, r]).catch(() => null))
+    ).then((pairs) => {
+      const flagged = {};
+      for (const pair of pairs) {
+        if (pair && pair[1] && (pair[1].verdict === "suspicious" || pair[1].verdict === "dangerous")) {
+          flagged[pair[0]] = pair[1];
+        }
+      }
+      sendResponse(flagged);
+    });
+    return true;
   }
 
   // Host safety check: local lists + heuristics only (no VT), responds with verdict
   if (request.action === "checkHost") {
     scanUrl(request.url, false)
       .then((result) => sendResponse(result))
-      .catch(() => sendResponse({ verdict: "unknown", reason: "Host check failed" }));
+      .catch(() => sendResponse({ verdict: "unknown", reason: "Host check failed", source: "none" }));
     return true;
   }
 
   // Full scan on click: includes VT
   if (request.action === "scanUrl" && sender.tab) {
     const tabId = sender.tab.id;
-    scanUrl(request.url, true).then((result) => {
+    scanUrl(request.url, true, request.force === true).then((result) => {
       // Update tab stats
       const stats = tabStats.get(tabId) || { total: 0, scanned: 0, safe: 0, suspicious: 0, dangerous: 0, unknown: 0 };
       stats.scanned++;
@@ -606,7 +719,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       logScanToSupabase(request.url, result.verdict, result.reason);
       sendResponse(result);
     }).catch((e) => {
-      sendResponse({ verdict: "unknown", reason: "Scan error: " + e.message });
+      sendResponse({ verdict: "unknown", reason: "Scan error: " + e.message, source: "none" });
     });
     return true;
   }
@@ -674,6 +787,20 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       threatfox: threatfoxSet.size,
       community: communitySet.size,
     });
+    return true;
+  }
+
+  // On-device model status for the popup dashboard card
+  if (request.action === "getModelStatus") {
+    ensureModelLoaded()
+      .then(() => chrome.storage.local.get("modelEnabled"))
+      .then(({ modelEnabled }) => sendResponse({
+        ready: true,
+        enabled: modelEnabled !== false,
+        meta: LinkGuardModel.getMeta(),   // version, vocab_size, metrics
+        threshold: LG_CONFIDENCE_THRESHOLD,
+      }))
+      .catch(() => sendResponse({ ready: false }));
     return true;
   }
 });

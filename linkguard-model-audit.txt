@@ -1,0 +1,80 @@
+LINKGUARD-MODEL — REPO AUDIT (handoff to website chat)
+Date: 2026-07-07
+Audited by: Claude Code, no files changed.
+
+You already have the outer CLAUDE.md (teaching contract + baseline-first plan).
+This file adds the missing piece: what ACTUALLY exists inside linkguard-model/.
+
+=====================================================================
+1. WHAT EXISTS
+=====================================================================
+
+CODE — 2,085 lines. The full OLD pipeline is present:
+  config.py                     central config (67 lines)
+  data/collect.py               downloads URLs (198)
+  data/preprocess.py            cleans + labels (257)
+  train/dataset.py              (76)
+  train/model.py                (142)
+  train/train.py                training loop (272)
+  train/evaluate.py             (197)
+  train/export_onnx.py          (200)
+  serve/features.py             50 hand-crafted features (242)
+  serve/hf_client.py            (85)
+  serve/local_inference.py      (201)
+  serve/spaces/app.py           HuggingFace Spaces app (148)
+  notebooks/train_colab.ipynb   Colab GPU trainer
+
+TRAINED MODEL — model_output/best_model/model.pt is 500 MB. A model WAS trained.
+
+DATA — NONE. data/raw/ is empty. Nothing to train on right now.
+
+=====================================================================
+2. THE IMPORTANT PART
+=====================================================================
+
+Everything here IS the SecureBERT attempt Vikash decided to step back from.
+Proof from the files:
+  - README.md   : "Hybrid model combining SecureBERT + 50-feature branch"
+  - config.py:34: BASE_MODEL = "ehsanaghaei/SecureBERT"
+  - config.py:29: LABEL2ID = {"safe":0, "suspicious":1, "dangerous":2}  (3 labels)
+
+Two clashes with the agreed baseline-first plan:
+  (1) It uses the HARD model (SecureBERT), not a simple baseline.
+      This is the exact thing that overwhelmed him the first time.
+  (2) "suspicious" is a TRAINING LABEL here. The plan says suspicious must
+      NOT be a label — it should be a THRESHOLD on the model's probability.
+      This repo bakes it in wrong.
+
+Last git commits confirm the model failed:
+  6e417af  "sanity check to prove model taking shortcuts"
+  6a9ef5e  "add checkpoint diagnostic..."
+  3780098  "sanity check before onnx export to diagnose wrong predictions"
+The trained 500 MB model was cheating (shortcut features), not learning.
+
+=====================================================================
+3. THE REAL STARTING LINE
+=====================================================================
+
+Baseline-first means we DO NOT continue this code. Start smaller:
+  - ~50k URLs (not millions)
+  - simple lexical features (TF-IDF style), not a transformer
+  - simple 2-class classifier: safe vs dangerous
+  - "suspicious" = threshold on probability, applied AFTER the model
+  - full pipeline end to end: data -> features -> train -> evaluate -> predict
+  - Vikash understands every line before moving on
+
+OPEN DECISION (his to make) — how to handle the old SecureBERT code:
+  (a) Archive it into /archive, build baseline in a clean space  [recommended]
+  (b) Leave it, build in a new baseline/ folder alongside
+  (c) Delete it (git history still keeps it)
+
+Recommendation: (a) — keep it for reference, but out of the way so the
+simple baseline is not confusing to look at while learning.
+
+=====================================================================
+4. NOTE ON DIRECTORY
+=====================================================================
+
+The Code session was started INSIDE linkguard-model/. Vikash wants to work
+from the OUTER main directory (LinkGuard/) which holds the extension +
+supabase + the outer CLAUDE.md. linkguard-model/ is a subfolder of it.

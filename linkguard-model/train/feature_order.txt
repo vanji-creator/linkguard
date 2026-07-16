@@ -1,0 +1,10 @@
+url_length
+host_length
+path_length
+num_dots
+num_hyphens
+num_digits
+num_slashes
+has_at_symbol
+has_raw_ip
+digit_ratio

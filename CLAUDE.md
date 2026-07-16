@@ -7,13 +7,21 @@ GitHub: https://github.com/vanji-creator/linkguard
 
 ---
 
-## Current State (v0.3.0) — Phase 2 COMPLETE
+## Current State (v0.6.0) — Application layer redesigned (monochrome), AI model deployed on-device
+
+### v0.6.0 application-layer redesign (2026-07-16)
+- **Monochrome Apple-sleek design system** across popup + in-page UI: black/white/gray only; the ONLY color is verdict semantics (green/amber/red). Shared tokens (`--lg-*` in content.css, `:root` in popup.html). Icons regenerated white-on-dark (`tools/gen_icons.py`).
+- **Structured scan responses**: `scanUrl`/`checkHost` return `{verdict, reason, source, confidence?}`. `source` ∈ urlhaus|openphish|threatfox|community|heuristic|model|remote-ai|virustotal|none. UI renders source chip via `SOURCE_LABELS` whitelist (never raw) + confidence meter when `confidence` is a number.
+- **Shallow-cache fix**: hover pre-scan cache entries carry `shallow: true`; click-time scans skip them (previously hover poisoned the 1hr cache so model/VT never ran on click).
+- **Host safety banner**: `#lg-host-banner` fixed top-center when the current site is suspicious/dangerous. Top frame only, per-host sessionStorage dismissal.
+- **Popup**: 3 tabs (Dashboard/Settings/Help). Explainer tab REMOVED from UI (background explain/testCall + content.js explainer code kept dormant; storage keys preserved — `saveSettings` now writes only keys present in the request). Dashboard adds model-status card (`getModelStatus` → LinkGuardModel.getMeta()) + protection summary. Version badge from `chrome.runtime.getManifest()`.
+- **Verdict-aware interception** (post-0.6.0 polish): page-load batch pre-scan (`preScanBatch`, local-only, cap 300 URLs) badges known-bad links red/yellow before any hover; hover pre-scan (`preScanUrl`) now responds and badges flagged links; links with a remembered result (`a.__lg_result`) skip the "Scan?" prompt on click and open the verdict card directly; verdict card has a "Scan again" button (non-safe verdicts) that forces a fresh full scan (`scanUrl` force flag bypasses 1hr cache). Icons are now crest-only full-bleed (no box/outline; `tools/gen_icons.py` classic heater geometry).
 
 ### Architecture
 - **manifest.json** — MV3, host_permissions for VT + URLhaus + OpenPhish + ThreatFox + Supabase
 - **background.js** — Service worker:
   - IndexedDB v2 blocklist manager (URLhaus + OpenPhish + ThreatFox + Community, refreshed daily)
-  - Scan pipeline: cache → URLhaus → OpenPhish → ThreatFox → Community → India heuristics → [AI Model placeholder] → VirusTotal
+  - Scan pipeline: cache → URLhaus → OpenPhish → ThreatFox → Community → India heuristics → **on-device AI model** → VirusTotal
   - VirusTotal v3 API (click-time only, free key, tries cached report first then submits)
   - In-memory URL verdict cache (1hr TTL)
   - Host safety check (`checkHost`) — local only, no VT, runs on every page load
@@ -32,7 +40,7 @@ GitHub: https://github.com/vanji-creator/linkguard
   - Duplicate badge guard — strips stale badges copied via `cloneNode()` before attaching new one
   - Text explainer only active when `textExplainerEnabled` setting is true
 - **content.css** — 6px dot badges (neutral/green/yellow/red), scan overlay card, spinner, report button
-- **popup.html/js** — 4 tabs: Dashboard | Settings (VT key + Supabase credentials) | Text Explainer | Help
+- **popup.html/js** — 3 tabs: Dashboard (model card + stats + protection summary) | Settings (model toggle, VT key, Supabase credentials) | Help
 - **supabase/schema.sql** — PostgreSQL schema: `urls`, `reports`, `scan_logs` tables with RLS
 - **supabase/functions/sync-blocklists/index.ts** — Deno edge function: fetches URLhaus/OpenPhish/ThreatFox → upserts into `urls` table. Schedule: `0 2 * * *` in Supabase dashboard.
 - **tools/gen_icons.py** — Icon generator (PIL). Produces heraldic heater-shield icons for all 3 sizes.
@@ -45,10 +53,20 @@ Click → cache (1hr TTL)
       → ThreatFox IndexedDB (threat IOCs)
       → Community IndexedDB (user-reported + Supabase-synced)
       → India heuristics (KYC scams, fake UPI, sketchy TLDs, deep subdomains)
-      → [AI Model — Phase 4 placeholder, commented out in background.js]
-      → VirusTotal API (free key, 4 req/min, 500/day)
+      → LinkGuard AI model — ON-DEVICE (model.js + model/linkguard_model_v1.json)
+           → confidence ≥90% (p ≤0.10 or ≥0.90) → return safe/dangerous, SKIP VirusTotal
+           → unsure → hold 3-way verdict, fall through to VT
+      → VirusTotal API (free key, 4 req/min, 500/day) — only when AI is unsure
+           → no VT key → AI 3-way fallback verdict (suspicious band asks user to add VT key)
            → rate limit hit → "could not verify" verdict
 ```
+
+### On-Device AI Model (Phase 3, deployed in v0.5.0)
+- **model/linkguard_model_v1.json** (~1.7MB) — exported TF-IDF char n-gram (3-5) + LogisticRegression weights: 57,750 chunks → [idf, coef], intercept, thresholds. Versioned artifact with sha256 fingerprint + metrics. Exported by `linkguard-model/train/export_model_json.py` (asserts all fitted params so a divergent retrain fails loudly).
+- **model.js** — pure-JS inference engine (zero deps, zero I/O), loaded via `importScripts` in the service worker; dual-environment (also loads in Node for tests). Exact sklearn parity: code-point slicing, Python whitespace class, char_wb short-word break, L2-norm folding, sigmoid.
+- **Parity gate**: `node linkguard-model/deploy/parity_test.mjs` — 100 golden vectors from Python must match within 1e-6 (actual worst diff 2e-8), plus latency benchmark (~200µs/URL; model init ~250ms one-time lazy load).
+- Training/eval pipeline in `linkguard-model/` (98.6% honest domain-grouped accuracy, 0.3% false alarms). "Suspicious" is a probability band (0.30–0.70) applied AFTER the model, never a training label. All-out-of-vocab input → p≈0.559 → suspicious (safe failsafe).
+- `modelEnabled` setting (default true) toggles it; remote API path (`LG_MODEL_URL`/`checkWithAIModel`) kept as disabled secondary channel for future Android app.
 
 ### Hover Pre-scan
 `mouseover` triggers local-only scan (cache + blocklists + heuristics, NO VirusTotal).
@@ -75,6 +93,7 @@ Commerce (amazon.com, amazon.in, flipkart.com, myntra.com, meesho.com)
 
 ### Settings Storage Keys
 - `vtApiKey` — VirusTotal API key
+- `modelEnabled` — boolean, default true — on-device AI model toggle
 - `supabaseUrl` — Supabase project URL
 - `supabaseAnonKey` — Supabase anon key
 - `textExplainerEnabled` — boolean, default false
@@ -129,18 +148,18 @@ scan logs as ML training dataset, daily feed sync edge function, heraldic shield
 
 **One manual step remaining**: Supabase dashboard → Edge Functions → sync-blocklists → Schedules → add `0 2 * * *` cron. Run once manually first: `supabase functions invoke sync-blocklists --no-verify-jwt`
 
-### Phase 3 — AI Model (URL Classifier) ← NEXT
-**Goal:** Fine-tune SecureBERT/DistilBERT on 3-5M labeled URLs. Publish on HuggingFace as
-`linkguard/url-safety-classifier`. Deploy as API. Plug into extension scan pipeline at the
-commented-out Phase 4 placeholder in `background.js` (`scanUrl` function, step 4).
+### Phase 3 — AI Model (URL Classifier) ✅ DEPLOYED (v0.5.0)
+**What shipped (differs from original SecureBERT plan — deliberately):** simple 2-class
+TF-IDF char n-gram (3-5) + LogisticRegression, trained on 26k engineered URLs
+(930 safe domains / 6,380 danger domains, per-domain capped, domain-grouped honest eval:
+98.6% accuracy, 0.3% false alarms). Deployed ON-DEVICE (not as API): weights exported to
+`model/linkguard_model_v1.json`, inference reimplemented in pure JS (`model.js`),
+Python↔JS parity proven by golden-vector test (worst diff 2e-8), ~200µs per URL.
+The original SecureBERT attempt failed via shortcut learning and is archived in
+`linkguard-model/archive/`.
 
-Model training pipeline lives in a separate repo/directory: `linkguard-model/`
-
-Training data: URLhaus + PhishTank + OpenPhish + ThreatFox dumps + Tranco top-1M (safe negatives) + Supabase scan_logs
-
-Integration: extension calls HuggingFace Inference API → high confidence (≥90%) → return verdict, skip VT.
-
-Full training guide documented in conversation history (data collection → preprocessing → fine-tuning → evaluation → ONNX export → HuggingFace publish → extension integration).
+Deferred within Phase 3: PhishTank data to close the phishing-miss gap → retrain → export v2;
+HuggingFace publish + remote API (for Android app, Phase 4); remote model-update channel.
 
 ### Phase 4 — Android App (Kotlin)
 - Overlay app that intercepts links opened from SMS, WhatsApp, browsers

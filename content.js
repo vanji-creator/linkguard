@@ -72,6 +72,26 @@
     return str.length > len ? str.slice(0, len) + "…" : str;
   }
 
+  // Verdict source → display label. This is a WHITELIST: the source
+  // string from the background is never put into HTML directly — only
+  // these fixed labels are. Unknown/missing sources render no chip.
+  const SOURCE_LABELS = {
+    urlhaus: "URLhaus",
+    openphish: "OpenPhish",
+    threatfox: "ThreatFox",
+    community: "Community",
+    heuristic: "Heuristics",
+    model: "On-device AI",
+    "remote-ai": "LinkGuard AI",
+    virustotal: "VirusTotal",
+    trusted: "Trusted domain",
+  };
+
+  function sourceChipHtml(source) {
+    const label = SOURCE_LABELS[source];
+    return label ? `<div class="lg-source-chip">${label}</div>` : "";
+  }
+
   function resolveHref(a) {
     try {
       const href = new URL(a.href, location.href).href;
@@ -151,7 +171,15 @@
     a.appendChild(badge);
 
     a.addEventListener("mouseover", () => {
-      chrome.runtime.sendMessage({ action: "preScanUrl", url: href });
+      chrome.runtime.sendMessage({ action: "preScanUrl", url: href }, (result) => {
+        if (chrome.runtime.lastError || !result) return;
+        // Local pre-scan is only authoritative when it FLAGS something
+        // (blocklist/heuristic hit) — a local "safe" is not a full scan.
+        if (result.verdict === "suspicious" || result.verdict === "dangerous") {
+          a.__lg_result = result;
+          setBadgeVerdict(a, result.verdict);
+        }
+      });
     });
 
     a.addEventListener("click", (e) => {
@@ -163,12 +191,51 @@
         navigate(href, isNewTab);
         return;
       }
+      // Already scanned and flagged — skip the "Scan?" prompt, show the
+      // verdict straight away (with a Scan-again button on the card)
+      if (a.__lg_result && a.__lg_result.verdict !== "safe") {
+        const overlay = buildOverlay();
+        showVerdict(overlay, href, isNewTab, a, a.__lg_result);
+        return;
+      }
       showScanOverlay(href, isNewTab, a);
     }, { capture: true });
   }
 
+  // Batch pre-scan: right after interception attaches, ask the background
+  // to check every unscanned link locally (blocklists + heuristics, no
+  // VT, no model) — so dangerous links turn red BEFORE any hover/click.
+  function preScanNewLinks() {
+    const hrefToAnchors = new Map();
+    document.querySelectorAll("a[href]").forEach((a) => {
+      if (!a.__lg_attached || a.__lg_prescanned) return;
+      if (a.__lg_verdict || a.__lg_result) return;       // already judged
+      if (!getBadge(a)) return;                          // not an intercepted link
+      const href = resolveHref(a);
+      if (!href) return;
+      a.__lg_prescanned = true;
+      if (!hrefToAnchors.has(href)) hrefToAnchors.set(href, []);
+      hrefToAnchors.get(href).push(a);
+    });
+    if (!hrefToAnchors.size) return;
+
+    chrome.runtime.sendMessage(
+      { action: "preScanBatch", urls: [...hrefToAnchors.keys()] },
+      (flagged) => {
+        if (chrome.runtime.lastError || !flagged) return;
+        for (const [href, result] of Object.entries(flagged)) {
+          for (const a of hrefToAnchors.get(href) || []) {
+            a.__lg_result = result;
+            setBadgeVerdict(a, result.verdict);
+          }
+        }
+      }
+    );
+  }
+
   function attachAllLinks() {
     document.querySelectorAll("a[href]").forEach(attachLinkHandlers);
+    preScanNewLinks();
     chrome.runtime.sendMessage({
       action: "reportPageLinks",
       count: document.querySelectorAll("a[href]").length,
@@ -181,6 +248,7 @@
       clearTimeout(observer._t);
       observer._t = setTimeout(() => {
         document.querySelectorAll("a[href]").forEach(attachLinkHandlers);
+        preScanNewLinks();
       }, 600);
     });
     observer.observe(document.body, { childList: true, subtree: true });
@@ -195,7 +263,50 @@
     chrome.runtime.sendMessage({ action: "checkHost", url: window.location.href }, (result) => {
       currentHostStatus = result?.verdict || "unknown";
       startGuarding();
+      if (result) maybeShowHostBanner(result);
     });
+  }
+
+  // ═══════════════════════════════════════════════════════
+  // HOST SAFETY BANNER
+  // Warns about the SITE the user is already on (links get
+  // badges; the page itself gets this). Top frame only, once
+  // per host per session.
+  // ═══════════════════════════════════════════════════════
+  function maybeShowHostBanner(result) {
+    if (window !== window.top) return;                    // no banners inside iframes
+    if (result.verdict !== "suspicious" && result.verdict !== "dangerous") return;
+
+    const dismissKey = "lg-host-dismissed:" + location.hostname;
+    try {
+      if (sessionStorage.getItem(dismissKey)) return;     // already dismissed this session
+    } catch { /* sessionStorage can be blocked — banner just shows again */ }
+
+    const attach = () => {
+      if (!document.body || document.getElementById("lg-host-banner")) return;
+      const banner = document.createElement("div");
+      banner.id = "lg-host-banner";
+      if (result.verdict === "dangerous") banner.classList.add("lg-banner-dangerous");
+      banner.innerHTML = `
+        <span class="lg-banner-dot"></span>
+        <div class="lg-banner-body">
+          <div class="lg-banner-title">${result.verdict === "dangerous"
+            ? "This site is flagged as dangerous"
+            : "This site looks suspicious"}</div>
+          ${result.reason ? `<div class="lg-banner-reason">${escapeHtml(result.reason)}</div>` : ""}
+          ${sourceChipHtml(result.source)}
+        </div>
+        <button class="lg-banner-dismiss" id="lg-banner-dismiss">Dismiss</button>
+      `;
+      document.body.appendChild(banner);
+      banner.querySelector("#lg-banner-dismiss").onclick = () => {
+        banner.remove();
+        try { sessionStorage.setItem(dismissKey, "1"); } catch {}
+      };
+    };
+
+    if (document.body) attach();
+    else document.addEventListener("DOMContentLoaded", attach, { once: true });
   }
 
   // ═══════════════════════════════════════════════════════
@@ -205,26 +316,32 @@
     document.getElementById("lg-scan-overlay")?.remove();
   }
 
-  function showScanOverlay(url, isNewTab, linkEl) {
+  // Shared overlay shell: backdrop + empty card. Every state
+  // (prompt / scanning / verdict) just fills the card.
+  function buildOverlay() {
     removeScanOverlay();
-
     const overlay = document.createElement("div");
     overlay.id = "lg-scan-overlay";
     overlay.innerHTML = `
       <div class="lg-backdrop"></div>
-      <div class="lg-card">
-        <div class="lg-card-icon">🔍</div>
-        <div class="lg-card-title">Scan this link?</div>
-        <div class="lg-card-url">${escapeHtml(truncate(url, 72))}</div>
-        <div class="lg-card-actions">
-          <button class="lg-btn lg-btn-primary" id="lg-do-scan">Scan</button>
-          <button class="lg-btn lg-btn-ghost" id="lg-do-skip">Skip</button>
-        </div>
-      </div>
+      <div class="lg-card"></div>
     `;
     document.body.appendChild(overlay);
-
     overlay.querySelector(".lg-backdrop").onclick = removeScanOverlay;
+    return overlay;
+  }
+
+  function showScanOverlay(url, isNewTab, linkEl) {
+    const overlay = buildOverlay();
+    overlay.querySelector(".lg-card").innerHTML = `
+      <div class="lg-card-title">Scan this link?</div>
+      <div class="lg-card-reason">LinkGuard can check it before you go — instantly, on your device.</div>
+      <div class="lg-card-url">${escapeHtml(truncate(url, 72))}</div>
+      <div class="lg-card-actions">
+        <button class="lg-btn lg-btn-primary" id="lg-do-scan">Scan</button>
+        <button class="lg-btn lg-btn-ghost" id="lg-do-skip">Skip</button>
+      </div>
+    `;
 
     overlay.querySelector("#lg-do-skip").onclick = () => {
       removeScanOverlay();
@@ -236,14 +353,14 @@
     };
   }
 
-  function showScanning(overlay, url, isNewTab, linkEl) {
+  function showScanning(overlay, url, isNewTab, linkEl, force) {
     overlay.querySelector(".lg-card").innerHTML = `
       <div class="lg-spinner"></div>
       <div class="lg-card-title">Scanning…</div>
       <div class="lg-card-url">${escapeHtml(truncate(url, 72))}</div>
     `;
 
-    chrome.runtime.sendMessage({ action: "scanUrl", url }, (result) => {
+    chrome.runtime.sendMessage({ action: "scanUrl", url, force: force === true }, (result) => {
       if (chrome.runtime.lastError || !result) {
         result = { verdict: "unknown", reason: "No response from scanner" };
       }
@@ -252,9 +369,9 @@
   }
 
   function showVerdict(overlay, url, isNewTab, linkEl, result) {
-    const { verdict, reason } = result;
+    const { verdict, reason, source } = result;
 
-    const icons = { safe: "✅", suspicious: "⚠️", dangerous: "⛔", unknown: "❓" };
+    const glyphs = { safe: "✓", suspicious: "!", dangerous: "✕", unknown: "?" };
     const titles = {
       safe: "Link appears safe",
       suspicious: "Suspicious link",
@@ -268,25 +385,52 @@
       unknown: "Proceed anyway",
     };
 
+    // Confidence meter — only when the scanner sent a real number.
+    // Clamp + round BEFORE templating so only a computed number is used.
+    let meterHtml = "";
+    if (typeof result.confidence === "number" && isFinite(result.confidence)) {
+      const percent = Math.round(Math.min(1, Math.max(0, result.confidence)) * 100);
+      meterHtml = `
+        <div class="lg-meter"><div class="lg-meter-fill lg-meter-${verdict}" style="width:${percent}%"></div></div>
+        <div class="lg-meter-label">${percent}% model confidence</div>
+      `;
+    }
+
     const card = overlay.querySelector(".lg-card");
     card.innerHTML = `
-      <div class="lg-card-icon">${icons[verdict] || "❓"}</div>
+      <div class="lg-verdict-disc lg-disc-${verdict}">${glyphs[verdict] || "?"}</div>
       <div class="lg-card-title lg-verdict-${verdict}">${titles[verdict] || "Unknown"}</div>
       ${reason ? `<div class="lg-card-reason">${escapeHtml(reason)}</div>` : ""}
+      ${sourceChipHtml(source)}
+      ${meterHtml}
       <div class="lg-card-url">${escapeHtml(truncate(url, 72))}</div>
       <div class="lg-card-actions">
         <button class="lg-btn lg-btn-cancel" id="lg-do-cancel">Cancel</button>
         <button class="lg-btn lg-btn-proceed lg-proceed-${verdict}" id="lg-do-proceed">${proceedLabels[verdict]}</button>
       </div>
       <div class="lg-report-row">
+        ${verdict !== "safe" ? `
+        <button class="lg-btn-rescan" id="lg-do-rescan">
+          <span class="lg-report-icon">↻</span>Scan again
+        </button>` : ""}
         <button class="lg-btn-report" id="lg-do-report">
           <span class="lg-report-icon">⚑</span>Report this link
         </button>
       </div>
     `;
 
-    // Update the badge on the original link
-    if (linkEl) setBadgeVerdict(linkEl, verdict);
+    // Remember the full result on the link element: next click skips the
+    // "Scan?" prompt and shows this verdict card directly
+    if (linkEl) {
+      setBadgeVerdict(linkEl, verdict);
+      linkEl.__lg_result = result;
+    }
+
+    // Scan again — force a FRESH full scan (bypasses the 1hr cache)
+    const rescanBtn = overlay.querySelector("#lg-do-rescan");
+    if (rescanBtn) {
+      rescanBtn.onclick = () => showScanning(overlay, url, isNewTab, linkEl, true);
+    }
 
     overlay.querySelector(".lg-backdrop").onclick = removeScanOverlay;
     overlay.querySelector("#lg-do-cancel").onclick = removeScanOverlay;

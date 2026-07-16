@@ -13,8 +13,8 @@ from PIL import Image, ImageDraw
 import math, os
 
 DARK   = ( 10,  10,  10, 255)
-ORANGE = (255, 101,   0, 255)
-BORDER = (255, 101,   0, 255)   # orange outline — crisp against dark background
+LIGHT  = (245, 245, 247, 255)   # Apple-white — monochrome brand (v0.6)
+BORDER = (245, 245, 247, 255)   # white outline — crisp against dark background
 TRANS  = (  0,   0,   0,   0)
 
 
@@ -45,69 +45,63 @@ def cbez(p0, p1, p2, p3, n=20):
 
 def shield_pts(S):
     """
-    Heater shield for an S×S canvas.
+    Classic heater shield (crest) for an S×S canvas — the shape everyone
+    reads as "security badge":
+
+      - TOP:    flat horizontal edge with wide, slightly-rounded shoulders
+      - UPPER SIDES: straight, vertical
+      - LOWER SIDES: sweeping cubic curves converging to a bottom point
 
     Normalised coordinates (0-1) are mapped into the padded work area
-    [pad .. S-pad] on both axes, with pad = 8% of S.
-
-    Circle for top arch (solved from 3 reference points):
-      shoulders (0.14, 0.28), peak (0.50, 0.06)  →  cx=0.50, cy=0.465, r=0.405
-    Arc angles: left ≈ 207.2°, peak = 270°, right ≈ 332.8°
+    [pad .. S-pad] on both axes. Tiny pad (2%) so the crest fills the
+    canvas edge-to-edge without anti-alias clipping.
     """
-    pad = 0.08 * S
+    pad = 0.02 * S
     SS  = S - 2 * pad          # working span
 
     def p(nx, ny):
         """Normalised [0-1] → canvas pixel."""
         return (pad + nx * SS, pad + ny * SS)
 
-    # ── Top arch ────────────────────────────────────────
-    arch_cx = pad + 0.500 * SS
-    arch_cy = pad + 0.465 * SS
-    arch_r  = 0.405 * SS
-    arch    = arc_pts(arch_cx, arch_cy, arch_r, 207.2, 332.8, n=48)
+    # Key stations — full-width crest (no surrounding box anymore)
+    top_y     = 0.020          # flat top edge height
+    shoulder  = 0.020          # x inset of left/right edges
+    waist_y   = 0.480          # where straight sides end and the curve begins
+    corner_r  = 0.060          # shoulder rounding radius
 
-    ls = arch[0]           # left  shoulder
-    rs = arch[-1]          # right shoulder
-    bp = p(0.500, 0.940)   # bottom point
+    bp = p(0.500, 0.955)       # bottom point
 
-    # ── Right side — nearly straight, slight outward taper ────────────
-    # Arc tangent at 332.8° (CCW): (-sin332.8°, cos332.8°) = (0.454, 0.891)
-    # Use a tiny k so the curve exits the arch smoothly but barely drifts outward.
-    k    = SS * 0.030
-    r_p1 = (rs[0] + 0.454*k, rs[1] + 0.891*k)  # smooth arch exit
+    # ── Flat top edge with rounded shoulders ───────────────────────────
+    # left shoulder corner arc: from left-side vertical up onto the top edge
+    lc_cx, lc_cy = p(shoulder + corner_r, top_y + corner_r)
+    rc_cx, rc_cy = p(1 - shoulder - corner_r, top_y + corner_r)
+    r_px = corner_r * SS
+    left_corner  = arc_pts(lc_cx, lc_cy, r_px, 180, 270, n=8)   # west → north
+    right_corner = arc_pts(rc_cx, rc_cy, r_px, 270, 360, n=8)   # north → east
 
-    r_p3 = p(0.750, 0.820)                      # lower-right corner
-    # P2: pulled inward of the straight rs→r_p3 line → slightly concave side
-    mid_x = (rs[0] + r_p3[0]) / 2
-    mid_y = (rs[1] + r_p3[1]) / 2
-    r_p2  = (mid_x - 0.018*SS, mid_y)           # nudge inward
+    # ── Straight vertical sides down to the waist ──────────────────────
+    right_top    = (rc_cx + r_px, rc_cy)               # east point of corner
+    right_waist  = p(1 - shoulder, waist_y)
+    left_waist   = p(shoulder, waist_y)
+    left_top     = (lc_cx - r_px, lc_cy)               # west point of corner
 
-    right_side = cbez(rs,    r_p1, r_p2, r_p3,  n=32)
-    right_bot  = cbez(r_p3,
-                      p(0.635, 0.910),
-                      p(0.555, 0.935),
-                      bp,  n=18)
+    # ── Lower curves: waist → bottom point (the heater sweep) ──────────
+    right_sweep = cbez(right_waist,
+                       p(1 - shoulder - 0.010, 0.700),
+                       p(0.740, 0.870),
+                       bp, n=36)
+    left_sweep  = cbez(bp,
+                       p(0.260, 0.870),
+                       p(shoulder + 0.010, 0.700),
+                       left_waist, n=36)
 
-    # ── Left side — mirror ───────────────────────────────────────────
-    l_p1 = (ls[0] - 0.454*k, ls[1] + 0.891*k)
-    l_p3 = p(0.250, 0.820)
-    mid_x = (ls[0] + l_p3[0]) / 2
-    mid_y = (ls[1] + l_p3[1]) / 2
-    l_p2  = (mid_x + 0.018*SS, mid_y)
-
-    left_bot  = cbez(bp,
-                     p(0.445, 0.935),
-                     p(0.365, 0.910),
-                     l_p3,  n=18)
-    left_side = cbez(l_p3, l_p2, l_p1, ls, n=32)
-
-    # Assemble (skip duplicate junction points)
-    return (arch
-            + right_side[1:]
-            + right_bot [1:]
-            + left_bot  [1:]
-            + left_side [1:])
+    # Assemble clockwise (skip duplicate junction points)
+    return (left_corner
+            + right_corner[1:]
+            + [right_top, right_waist]
+            + right_sweep[1:]
+            + left_sweep[1:]
+            + [left_waist, left_top])
 
 
 # ── Mask and composite helpers ─────────────────────────
@@ -147,35 +141,28 @@ def make_icon(final_size):
     SC = 4
     S  = final_size * SC
 
-    img  = Image.new('RGBA', (S, S), TRANS)
-    draw = ImageDraw.Draw(img)
+    # Crest only: transparent background, no box, no outline ring —
+    # the quartered shield IS the whole logo, edge to edge.
+    img = Image.new('RGBA', (S, S), TRANS)
 
-    # 1. Dark rounded-square background (moderate corner radius)
-    rrect(draw, 0, 0, S, S, int(S * 0.14), DARK)
-
-    # 2. Shield outer fill (acts as the outline ring)
     outer = shield_pts(S)
-    draw.polygon(outer, fill=BORDER)
+    mask  = make_mask(S, outer)
 
-    # 3. Quartered inner fill clipped to shield
-    inner = shrink(outer, S * 0.030)
-    mask  = make_mask(S, inner)
-
-    ys = [pt[1] for pt in inner]; xs = [pt[0] for pt in inner]
+    ys = [pt[1] for pt in outer]; xs = [pt[0] for pt in outer]
     div_cx = (min(xs) + max(xs)) / 2
     div_cy = min(ys) + (max(ys) - min(ys)) * 0.488   # horizontal divider
 
-    # TL=dark, TR=orange, BL=orange, BR=dark
+    # Quarters: TL=dark, TR=light, BL=light, BR=dark
     pattern = Image.new('RGBA', (S, S), DARK)
     pdraw   = ImageDraw.Draw(pattern)
-    pdraw.rectangle([div_cx, 0,      S,      div_cy], fill=ORANGE)  # top-right
-    pdraw.rectangle([0,      div_cy, div_cx, S     ], fill=ORANGE)  # bottom-left
+    pdraw.rectangle([div_cx, 0,      S,      div_cy], fill=LIGHT)  # top-right
+    pdraw.rectangle([0,      div_cy, div_cx, S     ], fill=LIGHT)  # bottom-left
 
     clipped = Image.new('RGBA', (S, S), TRANS)
     clipped.paste(pattern, mask=mask)
     img = Image.alpha_composite(img, clipped)
 
-    # 4. Cross divider lines clipped to shield
+    # Cross divider lines clipped to shield
     lw       = max(2, int(S * 0.018))
     line_img = Image.new('RGBA', (S, S), TRANS)
     ldraw    = ImageDraw.Draw(line_img)

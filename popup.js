@@ -1,12 +1,14 @@
 const $ = (id) => document.getElementById(id);
 
+// Version badge comes from the manifest — never hardcoded in HTML
+$("version-badge").textContent = "v" + chrome.runtime.getManifest().version;
+
 // ═══════════════════════════════════════════════════════
 // TAB SWITCHING
 // ═══════════════════════════════════════════════════════
 const tabs = {
   dashboard: { btn: $("tab-dashboard"), panel: $("panel-dashboard") },
   settings:  { btn: $("tab-settings"),  panel: $("panel-settings")  },
-  explainer: { btn: $("tab-explainer"), panel: $("panel-explainer") },
   help:      { btn: $("tab-help"),      panel: $("panel-help")      },
 };
 
@@ -23,7 +25,7 @@ Object.keys(tabs).forEach((name) => {
 });
 
 // ═══════════════════════════════════════════════════════
-// DASHBOARD
+// DASHBOARD — per-tab scan stats
 // ═══════════════════════════════════════════════════════
 chrome.runtime.sendMessage({ action: "getTabStats" }, (stats) => {
   const el = $("stats-content");
@@ -34,11 +36,11 @@ chrome.runtime.sendMessage({ action: "getTabStats" }, (stats) => {
 
   el.innerHTML = `
     <div class="stats-grid">
-      <div class="stat-card stat-total">
+      <div class="stat-card">
         <div class="stat-num">${stats.total || 0}</div>
         <div class="stat-label">Links</div>
       </div>
-      <div class="stat-card stat-scanned">
+      <div class="stat-card">
         <div class="stat-num">${stats.scanned || 0}</div>
         <div class="stat-label">Scanned</div>
       </div>
@@ -46,8 +48,6 @@ chrome.runtime.sendMessage({ action: "getTabStats" }, (stats) => {
         <div class="stat-num">${stats.safe || 0}</div>
         <div class="stat-label">Safe</div>
       </div>
-    </div>
-    <div class="stats-row">
       <div class="stat-card stat-suspicious">
         <div class="stat-num">${stats.suspicious || 0}</div>
         <div class="stat-label">Suspicious</div>
@@ -56,7 +56,7 @@ chrome.runtime.sendMessage({ action: "getTabStats" }, (stats) => {
         <div class="stat-num">${stats.dangerous || 0}</div>
         <div class="stat-label">Dangerous</div>
       </div>
-      <div class="stat-card stat-unknown">
+      <div class="stat-card">
         <div class="stat-num">${stats.unknown || 0}</div>
         <div class="stat-label">Unknown</div>
       </div>
@@ -66,17 +66,58 @@ chrome.runtime.sendMessage({ action: "getTabStats" }, (stats) => {
 });
 
 // ═══════════════════════════════════════════════════════
+// DASHBOARD — on-device model status card
+// ═══════════════════════════════════════════════════════
+chrome.runtime.sendMessage({ action: "getModelStatus" }, (res) => {
+  const dot = $("model-status").querySelector(".model-dot");
+  const sub = $("model-status").querySelector(".model-sub");
+  if (!res || !res.ready) {
+    dot.className = "model-dot off";
+    sub.textContent = "Model unavailable";
+    return;
+  }
+  const meta = res.meta || {};
+  const vocab = meta.vocab_size ? (meta.vocab_size / 1000).toFixed(1) + "k features" : "";
+  const version = meta.version ? "v" + meta.version : "";
+  const state = res.enabled ? "Active" : "Disabled in Settings";
+  dot.className = "model-dot " + (res.enabled ? "on" : "off");
+  sub.textContent = [version, vocab, state].filter(Boolean).join(" · ");
+});
+
+// ═══════════════════════════════════════════════════════
+// DASHBOARD — protection summary
+// ═══════════════════════════════════════════════════════
+function renderProtectionSummary(settings, listStats) {
+  if (listStats) {
+    const total = (listStats.urlhaus || 0) + (listStats.openphish || 0)
+                + (listStats.threatfox || 0) + (listStats.community || 0);
+    const el = $("sum-lists");
+    el.textContent = total >= 1000 ? (total / 1000).toFixed(1) + "k" : String(total);
+    el.className = "summary-val";
+  }
+  if (settings) {
+    const vt = $("sum-vt");
+    vt.textContent = settings.vtApiKey ? "Configured" : "Not set";
+    vt.className = settings.vtApiKey ? "summary-val" : "summary-val dim";
+
+    const community = $("sum-community");
+    const on = settings.supabaseUrl && settings.supabaseAnonKey;
+    community.textContent = on ? "Connected" : "Off";
+    community.className = on ? "summary-val" : "summary-val dim";
+  }
+}
+
+// ═══════════════════════════════════════════════════════
 // SETTINGS — load
 // ═══════════════════════════════════════════════════════
 chrome.runtime.sendMessage({ action: "getSettings" }, (res) => {
-  $("vtKey").value           = res?.vtApiKey       || "";
-  $("supabaseUrl").value     = res?.supabaseUrl    || "";
+  $("vtKey").value           = res?.vtApiKey        || "";
+  $("supabaseUrl").value     = res?.supabaseUrl     || "";
   $("supabaseAnonKey").value = res?.supabaseAnonKey || "";
-  $("geminiKey").value       = res?.customApiKey   || "";
-  $("explainer-toggle").checked = res?.textExplainerEnabled || false;
+  $("model-toggle").checked  = res?.modelEnabled !== false;   // default ON
 
-  // Show Supabase connection status
   updateSupabaseStatus(res?.supabaseUrl || "", res?.supabaseAnonKey || "");
+  renderProtectionSummary(res, null);
 });
 
 // Update the Supabase status pill whenever inputs change
@@ -111,8 +152,8 @@ function updateSupabaseStatus(url, key) {
 // SETTINGS — save
 // ═══════════════════════════════════════════════════════
 $("save-settings").onclick = () => {
-  const vtApiKey       = $("vtKey").value.trim();
-  const supabaseUrl    = $("supabaseUrl").value.trim();
+  const vtApiKey        = $("vtKey").value.trim();
+  const supabaseUrl     = $("supabaseUrl").value.trim();
   const supabaseAnonKey = $("supabaseAnonKey").value.trim();
   chrome.runtime.sendMessage(
     {
@@ -120,13 +161,12 @@ $("save-settings").onclick = () => {
       vtApiKey,
       supabaseUrl,
       supabaseAnonKey,
-      textExplainerEnabled: $("explainer-toggle").checked,
-      customApiKey: $("geminiKey").value.trim(),
-      modelName: "gemini-2.0-flash",
+      modelEnabled: $("model-toggle").checked,
     },
     (r) => {
       showStatus("settings-status", r?.ok ? "✓ Saved" : "Save failed", r?.ok);
       updateSupabaseStatus(supabaseUrl, supabaseAnonKey);
+      renderProtectionSummary({ vtApiKey, supabaseUrl, supabaseAnonKey }, null);
       if (r?.ok && supabaseUrl && supabaseAnonKey) {
         // Immediately pull the community blocklist so it's active without waiting for daily refresh
         chrome.runtime.sendMessage({ action: "refreshLists" }, () => loadListStats());
@@ -135,7 +175,7 @@ $("save-settings").onclick = () => {
   );
 };
 
-// Populate blocklist sizes
+// Populate blocklist sizes (settings pill + dashboard summary)
 function loadListStats() {
   chrome.runtime.sendMessage({ action: "getListStats" }, (stats) => {
     const el = $("lists-status");
@@ -146,6 +186,7 @@ function loadListStats() {
       `OpenPhish <span>${fmt(stats.openphish)}</span> · ` +
       `ThreatFox <span>${fmt(stats.threatfox)}</span>` +
       (stats.community > 0 ? ` · Community <span>${fmt(stats.community)}</span>` : "");
+    renderProtectionSummary(null, stats);
   });
 }
 loadListStats();
@@ -157,33 +198,6 @@ $("refresh-lists").onclick = () => {
   chrome.runtime.sendMessage({ action: "refreshLists" }, () => {
     showStatus("settings-status", "✓ Lists refreshed", true);
     loadListStats();
-  });
-};
-
-// ═══════════════════════════════════════════════════════
-// TEXT EXPLAINER — save + test
-// ═══════════════════════════════════════════════════════
-$("save-explainer").onclick = () => {
-  chrome.runtime.sendMessage(
-    {
-      action: "saveSettings",
-      vtApiKey:             $("vtKey").value.trim(),
-      supabaseUrl:          $("supabaseUrl").value.trim(),
-      supabaseAnonKey:      $("supabaseAnonKey").value.trim(),
-      textExplainerEnabled: $("explainer-toggle").checked,
-      customApiKey:         $("geminiKey").value.trim(),
-      modelName:            "gemini-2.0-flash",
-    },
-    (r) => showStatus("explainer-status", r?.ok ? "✓ Saved" : "Save failed", r?.ok)
-  );
-};
-
-$("test-gemini").onclick = () => {
-  $("explainer-status").textContent = "Testing…";
-  $("explainer-status").className   = "status";
-  chrome.runtime.sendMessage({ action: "testCall" }, (r) => {
-    if (!r) return showStatus("explainer-status", "No response", false);
-    showStatus("explainer-status", r.ok ? "✓ Gemini connected" : r.message || "Failed", r.ok);
   });
 };
 
