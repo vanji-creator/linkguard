@@ -1,16 +1,15 @@
 {
   "manifest_version": 3,
-  "name": "LinkGuard",
-  "version": "0.6.0",
-  "description": "Link safety scanner — scans links on click using VirusTotal, URLhaus, OpenPhish, ThreatFox, and a community blocklist.",
+  "name": "Clikk",
+  "version": "0.7.0",
+  "description": "Checks links for safety before you visit them — on-device AI plus URLhaus, OpenPhish and ThreatFox blocklists. Private by design.",
   "permissions": ["storage", "scripting", "tabs", "webNavigation", "alarms"],
   "host_permissions": [
     "<all_urls>",
     "https://www.virustotal.com/*",
     "https://urlhaus.abuse.ch/*",
     "https://openphish.com/*",
-    "https://threatfox-api.abuse.ch/*",
-    "https://*.hf.space/*"
+    "https://threatfox-api.abuse.ch/*"
   ],
   "background": { "service_worker": "background.js" },
   "content_scripts": [
@@ -22,7 +21,7 @@
     }
   ],
   "action": {
-    "default_title": "LinkGuard",
+    "default_title": "Clikk",
     "default_popup": "popup.html"
   },
   "icons": {

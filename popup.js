@@ -99,11 +99,6 @@ function renderProtectionSummary(settings, listStats) {
     const vt = $("sum-vt");
     vt.textContent = settings.vtApiKey ? "Configured" : "Not set";
     vt.className = settings.vtApiKey ? "summary-val" : "summary-val dim";
-
-    const community = $("sum-community");
-    const on = settings.supabaseUrl && settings.supabaseAnonKey;
-    community.textContent = on ? "Connected" : "Off";
-    community.className = on ? "summary-val" : "summary-val dim";
   }
 }
 
@@ -111,66 +106,25 @@ function renderProtectionSummary(settings, listStats) {
 // SETTINGS — load
 // ═══════════════════════════════════════════════════════
 chrome.runtime.sendMessage({ action: "getSettings" }, (res) => {
-  $("vtKey").value           = res?.vtApiKey        || "";
-  $("supabaseUrl").value     = res?.supabaseUrl     || "";
-  $("supabaseAnonKey").value = res?.supabaseAnonKey || "";
-  $("model-toggle").checked  = res?.modelEnabled !== false;   // default ON
-
-  updateSupabaseStatus(res?.supabaseUrl || "", res?.supabaseAnonKey || "");
+  $("vtKey").value          = res?.vtApiKey || "";
+  $("model-toggle").checked = res?.modelEnabled !== false;   // default ON
   renderProtectionSummary(res, null);
 });
-
-// Update the Supabase status pill whenever inputs change
-$("supabaseUrl").addEventListener("input", () =>
-  updateSupabaseStatus($("supabaseUrl").value.trim(), $("supabaseAnonKey").value.trim())
-);
-$("supabaseAnonKey").addEventListener("input", () =>
-  updateSupabaseStatus($("supabaseUrl").value.trim(), $("supabaseAnonKey").value.trim())
-);
-
-function updateSupabaseStatus(url, key) {
-  const el    = $("supabase-status");
-  const label = $("supabase-status-text");
-  const hasUrl = url.length > 0;
-  const hasKey = key.length > 0;
-
-  if (hasUrl && hasKey) {
-    el.className    = "supabase-status connected";
-    label.textContent = "Connected — community blocklist active";
-  } else if (hasUrl || hasKey) {
-    el.className    = "supabase-status partial";
-    label.textContent = hasUrl
-      ? "URL saved — paste anon key and Save"
-      : "Key saved — paste project URL and Save";
-  } else {
-    el.className    = "supabase-status";
-    label.textContent = "Not configured — community blocklist disabled";
-  }
-}
 
 // ═══════════════════════════════════════════════════════
 // SETTINGS — save
 // ═══════════════════════════════════════════════════════
 $("save-settings").onclick = () => {
-  const vtApiKey        = $("vtKey").value.trim();
-  const supabaseUrl     = $("supabaseUrl").value.trim();
-  const supabaseAnonKey = $("supabaseAnonKey").value.trim();
+  const vtApiKey = $("vtKey").value.trim();
   chrome.runtime.sendMessage(
     {
       action: "saveSettings",
       vtApiKey,
-      supabaseUrl,
-      supabaseAnonKey,
       modelEnabled: $("model-toggle").checked,
     },
     (r) => {
       showStatus("settings-status", r?.ok ? "✓ Saved" : "Save failed", r?.ok);
-      updateSupabaseStatus(supabaseUrl, supabaseAnonKey);
-      renderProtectionSummary({ vtApiKey, supabaseUrl, supabaseAnonKey }, null);
-      if (r?.ok && supabaseUrl && supabaseAnonKey) {
-        // Immediately pull the community blocklist so it's active without waiting for daily refresh
-        chrome.runtime.sendMessage({ action: "refreshLists" }, () => loadListStats());
-      }
+      renderProtectionSummary({ vtApiKey }, null);
     }
   );
 };

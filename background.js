@@ -6,7 +6,6 @@ importScripts("model.js");
 // ═══════════════════════════════════════════════════════
 // CONFIG
 // ═══════════════════════════════════════════════════════
-const DEFAULT_MODEL = "gemini-2.0-flash";
 const CACHE_TTL_MS = 60 * 60 * 1000;           // 1 hour
 const LIST_REFRESH_MS = 24 * 60 * 60 * 1000;   // 24 hours
 const VT_BASE = "https://www.virustotal.com/api/v3";
@@ -105,7 +104,7 @@ async function loadListsFromDB() {
     listsLoaded = true;
     console.log(`LinkGuard lists: URLhaus=${urlhausSet.size}, OpenPhish=${openphishSet.size}, ThreatFox=${threatfoxSet.size}, Community=${communitySet.size}`);
   } catch (e) {
-    console.error("LinkGuard: failed to load lists from IndexedDB", e);
+    console.warn("LinkGuard: failed to load lists from IndexedDB", e);
   }
 }
 
@@ -127,7 +126,7 @@ async function fetchURLhaus() {
     urlhausSet = new Set(urls);
     console.log(`LinkGuard: URLhaus updated — ${urls.length} URLs`);
   } catch (e) {
-    console.error("LinkGuard: URLhaus fetch failed", e.message);
+    console.warn("LinkGuard: URLhaus fetch failed", e.message);
   }
 }
 
@@ -143,7 +142,7 @@ async function fetchOpenPhish() {
     openphishSet = new Set(urls);
     console.log(`LinkGuard: OpenPhish updated — ${urls.length} URLs`);
   } catch (e) {
-    console.error("LinkGuard: OpenPhish fetch failed", e.message);
+    console.warn("LinkGuard: OpenPhish fetch failed", e.message);
   }
 }
 
@@ -166,7 +165,7 @@ async function fetchThreatFox() {
     threatfoxSet = new Set(urls);
     console.log(`LinkGuard: ThreatFox updated — ${urls.length} URLs`);
   } catch (e) {
-    console.error("LinkGuard: ThreatFox fetch failed", e.message);
+    console.warn("LinkGuard: ThreatFox fetch failed", e.message);
   }
 }
 
@@ -202,7 +201,7 @@ async function fetchCommunityBlocklist() {
     communitySet = new Set(urls);
     console.log(`LinkGuard: Community blocklist updated — ${urls.length} URLs`);
   } catch (e) {
-    console.error("LinkGuard: Community blocklist fetch failed", e.message);
+    console.warn("LinkGuard: Community blocklist fetch failed", e.message);
   }
 }
 
@@ -217,14 +216,17 @@ async function reportUrlToSupabase(url, verdictAtTime) {
       body: JSON.stringify({ url, verdict_at_time: verdictAtTime }),
     });
   } catch (e) {
-    console.error("LinkGuard: report submission failed", e.message);
+    console.warn("LinkGuard: report submission failed", e.message);
   }
 }
 
-// Silently log dangerous/suspicious verdicts for ML training data
-// Never logs safe or unknown verdicts (privacy)
+// Log dangerous/suspicious verdicts for ML training data.
+// Requires EXPLICIT user consent (shareThreatsEnabled) — default OFF.
+// Never logs safe or unknown verdicts (privacy).
 async function logScanToSupabase(url, verdict, reason) {
   if (verdict === "safe" || verdict === "unknown") return;
+  const { shareThreatsEnabled } = await chrome.storage.local.get("shareThreatsEnabled");
+  if (shareThreatsEnabled !== true) return;   // no consent, no data leaves the device
   const cfg = await getSupabaseConfig();
   if (!cfg) return;
   fetch(`${cfg.supabaseUrl}/rest/v1/scan_logs`, {
@@ -268,7 +270,7 @@ function checkLocalLists(url) {
   if (threatfoxSet.has(url) || threatfoxSet.has(norm))
     return { verdict: "dangerous", reason: "Found in ThreatFox threat database", source: "threatfox" };
   if (communitySet.has(url) || communitySet.has(norm))
-    return { verdict: "dangerous", reason: "Reported by the LinkGuard community", source: "community" };
+    return { verdict: "dangerous", reason: "Reported by the Clikk community", source: "community" };
   return null;
 }
 
@@ -430,7 +432,7 @@ function ensureModelLoaded() {
       .then((resp) => resp.json())
       .then((modelJson) => LinkGuardModel.init(modelJson))
       .catch((e) => {
-        console.error("[LinkGuard] on-device model failed to load:", e);
+        console.warn("[LinkGuard] on-device model failed to load:", e);
         modelReadyPromise = null; // allow retry on next scan
         throw e;
       });
@@ -489,7 +491,7 @@ async function scanUrl(url, includeVT, force = false) {
     return heuristic;
   }
 
-  // 4. LinkGuard AI model — ON-DEVICE (primary scanner at click time)
+  // 4. Clikk AI — ON-DEVICE (primary scanner at click time)
   //    Instant and private: inference runs locally, URL never leaves device.
   let modelFallback = null;
   const { modelEnabled } = await chrome.storage.local.get("modelEnabled");
@@ -501,7 +503,7 @@ async function scanUrl(url, includeVT, force = false) {
         // ≥90% sure → trust the model, skip VirusTotal entirely
         const r = {
           verdict: modelResult.p >= 0.5 ? "dangerous" : "safe",
-          reason: `LinkGuard AI model — ${(modelResult.confidence * 100).toFixed(0)}% confident (checked on-device)`,
+          reason: `Clikk AI — ${(modelResult.confidence * 100).toFixed(0)}% confident (checked on-device)`,
           source: "model",
           confidence: modelResult.confidence,
         };
@@ -513,8 +515,8 @@ async function scanUrl(url, includeVT, force = false) {
       modelFallback = {
         verdict: modelResult.verdict,
         reason: modelResult.verdict === "suspicious"
-          ? "LinkGuard AI model is unsure about this link — add a VirusTotal key in Settings for a deeper check"
-          : `LinkGuard AI model — ${(modelResult.confidence * 100).toFixed(0)}% confident (low; add a VirusTotal key for a second opinion)`,
+          ? "Clikk AI is unsure about this link — add a VirusTotal key in Settings for a deeper check"
+          : `Clikk AI — ${(modelResult.confidence * 100).toFixed(0)}% confident (low; add a VirusTotal key for a second opinion)`,
         source: "model",
         confidence: modelResult.confidence,
       };
@@ -533,7 +535,7 @@ async function scanUrl(url, includeVT, force = false) {
       if (aiConfidence >= LG_CONFIDENCE_THRESHOLD) {
         const r = {
           verdict: aiVerdict,
-          reason: `LinkGuard AI (${(aiConfidence * 100).toFixed(0)}% confidence)`,
+          reason: `Clikk AI (${(aiConfidence * 100).toFixed(0)}% confidence)`,
           source: "remote-ai",
           confidence: aiConfidence,
         };
@@ -561,7 +563,7 @@ async function scanUrl(url, includeVT, force = false) {
   if (aiVerdict) {
     const r = {
       verdict: aiVerdict,
-      reason: `LinkGuard AI (${(aiConfidence * 100).toFixed(0)}% — low confidence; add VirusTotal key in Settings for extra check)`,
+      reason: `Clikk AI (${(aiConfidence * 100).toFixed(0)}% — low confidence; add VirusTotal key in Settings for extra check)`,
       source: "remote-ai",
       confidence: aiConfidence,
     };
@@ -574,7 +576,7 @@ async function scanUrl(url, includeVT, force = false) {
 }
 
 // ═══════════════════════════════════════════════════════
-// INJECTION (kept from Gexplain)
+// INJECTION
 // ═══════════════════════════════════════════════════════
 async function ensureInjectedAllFrames(tabId) {
   try { await chrome.tabs.sendMessage(tabId, { action: "ping" }); } catch (_) {}
@@ -591,9 +593,7 @@ chrome.runtime.onInstalled.addListener(async () => {
   const DEFAULTS = {
     vtApiKey: "",
     modelEnabled: true,
-    textExplainerEnabled: false,
-    customApiKey: "",
-    modelName: DEFAULT_MODEL,
+    shareThreatsEnabled: false,   // telemetry consent — OFF until the user opts in
     supabaseUrl: "",
     supabaseAnonKey: "",
   };
@@ -652,7 +652,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
 
   if (request.action === "getSettings") {
     chrome.storage.local.get(
-      ["vtApiKey", "modelEnabled", "textExplainerEnabled", "customApiKey", "modelName", "supabaseUrl", "supabaseAnonKey"],
+      ["vtApiKey", "modelEnabled", "shareThreatsEnabled", "supabaseUrl", "supabaseAnonKey"],
       (res) => sendResponse(res)
     );
     return true;
@@ -660,8 +660,8 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
 
   if (request.action === "saveSettings") {
     // Only write keys the sender actually included — a UI that stops
-    // sending a key (e.g. the removed Gemini fields) must never wipe it.
-    const SETTING_KEYS = ["vtApiKey", "modelEnabled", "textExplainerEnabled", "customApiKey", "modelName", "supabaseUrl", "supabaseAnonKey"];
+    // sending a key must never wipe it.
+    const SETTING_KEYS = ["vtApiKey", "modelEnabled", "shareThreatsEnabled", "supabaseUrl", "supabaseAnonKey"];
     const toSave = {};
     for (const key of SETTING_KEYS) {
       if (request[key] !== undefined) toSave[key] = request[key];
@@ -764,17 +764,6 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     return true;
   }
 
-  // Gemini text explain
-  if (request.action === "explain") {
-    handleExplain(request.text, sendResponse);
-    return true;
-  }
-
-  if (request.action === "testCall") {
-    testCall(sendResponse);
-    return true;
-  }
-
   if (request.action === "refreshLists") {
     refreshLists().then(() => sendResponse({ ok: true })).catch(() => sendResponse({ ok: false }));
     return true;
@@ -804,58 +793,3 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     return true;
   }
 });
-
-// ═══════════════════════════════════════════════════════
-// GEMINI EXPLAIN (kept from Gexplain — gated by setting)
-// ═══════════════════════════════════════════════════════
-async function handleExplain(text, sendResponse) {
-  try {
-    const { customApiKey, modelName } = await chrome.storage.local.get(["customApiKey", "modelName"]);
-    if (!customApiKey) return sendResponse({ error: true, message: "Add your Gemini API key in the Text Explainer tab." });
-    const model = modelName || DEFAULT_MODEL;
-    const url = `https://generativelanguage.googleapis.com/v1/models/${model}:generateContent?key=${customApiKey}`;
-    const r = await fetch(url, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        contents: [{ parts: [{ text: `Briefly explain: ${text}` }] }],
-        generationConfig: { temperature: 0.3, maxOutputTokens: 256 },
-      }),
-    });
-    if (!r.ok) {
-      const err = await r.json().catch(() => ({}));
-      return sendResponse({ error: true, message: err.error?.message || `HTTP ${r.status}` });
-    }
-    const data = await r.json();
-    const explanation = data?.candidates?.[0]?.content?.parts?.[0]?.text || "";
-    if (!explanation) return sendResponse({ error: true, message: `No output. Finish: ${data?.candidates?.[0]?.finishReason || "UNKNOWN"}` });
-    sendResponse({ error: false, explanation });
-  } catch (e) {
-    sendResponse({ error: true, message: e.message || "Unknown error" });
-  }
-}
-
-async function testCall(sendResponse) {
-  try {
-    const { customApiKey, modelName } = await chrome.storage.local.get(["customApiKey", "modelName"]);
-    if (!customApiKey) return sendResponse({ ok: false, message: "No Gemini API key set." });
-    const model = modelName || DEFAULT_MODEL;
-    const url = `https://generativelanguage.googleapis.com/v1/models/${model}:generateContent?key=${customApiKey}`;
-    const r = await fetch(url, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        contents: [{ parts: [{ text: "ping" }] }],
-        generationConfig: { temperature: 0.1, maxOutputTokens: 8 },
-      }),
-    });
-    if (!r.ok) {
-      const err = await r.json().catch(() => ({}));
-      return sendResponse({ ok: false, message: err.error?.message || `HTTP ${r.status}` });
-    }
-    const data = await r.json();
-    sendResponse({ ok: true, message: data?.candidates?.[0]?.content?.parts?.[0]?.text || "OK" });
-  } catch (e) {
-    sendResponse({ ok: false, message: e.message || "Error" });
-  }
-}

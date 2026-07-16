@@ -1,13 +1,24 @@
-# LinkGuard — Claude Code Context
+# Clikk (formerly LinkGuard) — Claude Code Context
 
 ## What is this?
 A Chrome extension (Manifest V3) that scans links for safety before the user visits them.
+**Renamed to "Clikk" (2026-07-16)** — user-facing brand only: manifest name/title, popup wordmark ("Cli**kk**"), overlay copy, scan reason strings ("Clikk AI"). Internal identifiers deliberately unchanged (IndexedDB "linkguard", `lg-` CSS prefixes, `__LINKGUARD_LOADED__`, `LinkGuardModel` JS object, model file names, repo name) — renaming those risks breaking storage/parity for zero user value. Known collision, accepted: clikk.app (Norwegian link-management startup) — revisit trademark before Play Store launch (Phase 6).
 Forked from "Gexplain" (text explainer) — that feature is preserved but off by default.
 GitHub: https://github.com/vanji-creator/linkguard
 
 ---
 
-## Current State (v0.6.0) — Application layer redesigned (monochrome), AI model deployed on-device
+## Current State (v0.7.0) — STORE-READY (Chrome Web Store submission prepared)
+
+### v0.7.0 store prep (2026-07-16)
+- **Gexplain text-explainer fully REMOVED** (background handleExplain/testCall + content.js explainer section + all UI; storage keys textExplainerEnabled/customApiKey/modelName no longer read/written — single-purpose compliance)
+- **Supabase HIDDEN from UI** ("make it perfect later"): popup fields/status removed, background code kept inert (no credentials = no traffic). Telemetry `logScanToSupabase` now HARD-GATED on `shareThreatsEnabled` consent setting (default false, no UI yet)
+- **Unused `*.hf.space` host permission removed** from manifest (LG_MODEL_URL remote channel still in code, disabled)
+- **PRIVACY.md** at repo root (store privacy policy URL = github blob link)
+- **store/LISTING.md** — full submission kit: description, single-purpose statement, per-permission justifications, data-usage form answers
+- **tools/package.sh** → `dist/clikk-v0.7.0.zip` (11 runtime files, 1.8MB, no dev/training files)
+- **store/make_promo.py** → promo tiles 440×280 + 1400×560; **store/screenshot_guide.md** for the 3 store screenshots
+- Settings now only: `vtApiKey`, `modelEnabled`, `shareThreatsEnabled` (+dormant supabaseUrl/AnonKey in storage)
 
 ### v0.6.0 application-layer redesign (2026-07-16)
 - **Monochrome Apple-sleek design system** across popup + in-page UI: black/white/gray only; the ONLY color is verdict semantics (green/amber/red). Shared tokens (`--lg-*` in content.css, `:root` in popup.html). Icons regenerated white-on-dark (`tools/gen_icons.py`).

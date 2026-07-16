@@ -2,7 +2,7 @@
 <html>
   <head>
     <meta charset="utf-8" />
-    <title>LinkGuard</title>
+    <title>Clikk</title>
     <style>
       /* ═══════════════════════════════════════════════════
          LinkGuard v0.6 — monochrome design system
@@ -267,29 +267,6 @@
       .input:focus { border-color: var(--line-strong); background: var(--surface-3); }
       .hint { font-size: 11px; color: var(--text-3); line-height: 1.5; margin-top: 6px; }
 
-      .supabase-status {
-        display: flex;
-        align-items: center;
-        gap: 8px;
-        font-size: 11.5px;
-        color: var(--text-3);
-        padding: 8px 11px;
-        background: var(--surface);
-        border: 1px solid var(--line);
-        border-radius: var(--r-ctl);
-        margin-bottom: 14px;
-      }
-      .supabase-status .dot {
-        width: 7px;
-        height: 7px;
-        border-radius: 50%;
-        background: var(--text-4);
-        flex-shrink: 0;
-      }
-      .supabase-status.connected .dot { background: var(--safe); }
-      .supabase-status.connected      { color: var(--text-2); }
-      .supabase-status.partial .dot   { background: var(--warn); }
-
       .lists-status {
         font-size: 12px;
         color: var(--text-3);
@@ -380,7 +357,7 @@
   <body>
     <div class="header">
       <div class="header-mark">◆</div>
-      <span class="header-title">Link<span>Guard</span></span>
+      <span class="header-title">Cli<span>kk</span></span>
       <span class="header-badge" id="version-badge"></span>
     </div>
 
@@ -410,7 +387,6 @@
         <div class="caps-label">Protection</div>
         <div class="summary-row"><span>Blocklist entries</span><span class="summary-val dim" id="sum-lists">—</span></div>
         <div class="summary-row"><span>VirusTotal</span><span class="summary-val dim" id="sum-vt">—</span></div>
-        <div class="summary-row"><span>Community blocklist</span><span class="summary-val dim" id="sum-community">—</span></div>
       </div>
     </div>
 
@@ -435,19 +411,6 @@
         <div class="hint">Second-opinion scanner, used only when the AI model is unsure (&lt;90% confidence). Free key at virustotal.com.</div>
       </div>
 
-      <div class="field">
-        <label>Supabase Project URL</label>
-        <input id="supabaseUrl" class="input" type="text" placeholder="https://xxxx.supabase.co" />
-      </div>
-      <div class="field">
-        <label>Supabase Anon Key</label>
-        <input id="supabaseAnonKey" class="input" type="password" placeholder="eyJh…" />
-      </div>
-      <div class="supabase-status" id="supabase-status">
-        <div class="dot"></div>
-        <span id="supabase-status-text">Not configured</span>
-      </div>
-
       <div class="lists-status" id="lists-status">Loading…</div>
 
       <div class="actions">
@@ -462,7 +425,7 @@
       <div class="card">
         <div class="help-text">
           <strong>How it works</strong><br>
-          Click a link — LinkGuard intercepts and scans it before navigating.
+          Click a link — Clikk intercepts and scans it before navigating.
           Hovering pre-scans locally for speed.
         </div>
       </div>
@@ -474,7 +437,7 @@
           <div class="pipeline-item"><div class="pipeline-num">2</div>URLhaus — malware URLs</div>
           <div class="pipeline-item"><div class="pipeline-num">3</div>OpenPhish — phishing feeds</div>
           <div class="pipeline-item"><div class="pipeline-num">4</div>ThreatFox — threat IOCs</div>
-          <div class="pipeline-item"><div class="pipeline-num">5</div>Community blocklist (Supabase)</div>
+          <div class="pipeline-item"><div class="pipeline-num">5</div>Community blocklist</div>
           <div class="pipeline-item"><div class="pipeline-num">6</div>India scam heuristics</div>
           <div class="pipeline-item"><div class="pipeline-num">7</div>On-device AI — decides alone at ≥90% confidence</div>
           <div class="pipeline-item"><div class="pipeline-num">8</div>VirusTotal — only when the AI is unsure</div>
