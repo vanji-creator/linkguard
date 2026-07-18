@@ -19,3 +19,6 @@ package-lock.json
 .env
 *.key
 secrets.json
+
+# raw screenshot captures (full-desktop, may contain personal info) — curated crops live in store/assets/screenshots/
+/screenshots/
